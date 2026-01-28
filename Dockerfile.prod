@@ -19,6 +19,9 @@ ARG NEXT_PUBLIC_PAYPAL_CLIENT_ID
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 ENV NEXT_PUBLIC_PAYPAL_CLIENT_ID=$NEXT_PUBLIC_PAYPAL_CLIENT_ID
 
+# Create public folder if it doesn't exist (required for standalone build)
+RUN mkdir -p public
+
 # Build the application
 RUN npm run build
 
@@ -30,10 +33,14 @@ ENV NODE_ENV=production
 RUN addgroup --system --gid 1001 nodejs
 RUN adduser --system --uid 1001 nextjs
 
-# Copy necessary files
-COPY --from=builder /app/public ./public
+# Copy standalone build
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
+
+# Copy static files
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+
+# Copy public folder (may be empty but needs to exist)
+COPY --from=builder --chown=nextjs:nodejs /app/public ./public
 
 USER nextjs
 
