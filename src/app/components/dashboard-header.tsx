@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Loader2, ArrowRight, PlusCircle, RefreshCw, Sparkles, Crown, Lock } from 'lucide-react';
+import { Loader2, ArrowRight, PlusCircle, RefreshCw, Sparkles, Crown, Lock, Users } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -38,7 +38,7 @@ type DashboardHeaderProps = {
 export function DashboardHeader({ hasInstances, onRefresh }: DashboardHeaderProps) {
   const router = useRouter();
   const { toast } = useToast();
-  const { token, isPremium, subscription } = useAuthContext();
+  const { token, isPremium, isSubUser, subscription } = useAuthContext();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isConnectDialogOpen, setIsConnectDialogOpen] = useState(false);
   const [isQrDialogOpen, setIsQrDialogOpen] = useState(false);
@@ -199,7 +199,12 @@ export function DashboardHeader({ hasInstances, onRefresh }: DashboardHeaderProp
             <h1 className="text-3xl font-display font-bold tracking-tight text-foreground">
               Painel
             </h1>
-            {subscription && (
+            {isSubUser ? (
+              <Badge variant="outline" className="border-blue-500/50 text-blue-600 dark:text-blue-400">
+                <Users className="mr-1 h-3 w-3" />
+                SUB-USUÁRIO
+              </Badge>
+            ) : subscription && (
               <Badge
                 variant={isPremium ? "default" : "secondary"}
                 className={isPremium ? "bg-gradient-to-r from-amber-500 to-orange-500 text-white border-0" : ""}
@@ -229,20 +234,32 @@ export function DashboardHeader({ hasInstances, onRefresh }: DashboardHeaderProp
             <RefreshCw className={`mr-2 h-4 w-4 ${isUpdating ? 'animate-spin' : ''}`} />
             Atualizar
           </Button>
-          <Button
-            onClick={handleConnectClick}
-            className={`h-10 px-5 transition-all ${isPremium
-                ? 'gradient-primary hover:opacity-90 shadow-glow'
-                : 'bg-muted text-muted-foreground hover:bg-muted/80'
-              }`}
-          >
-            {isPremium ? (
-              <PlusCircle className="mr-2 h-4 w-4" />
-            ) : (
-              <Lock className="mr-2 h-4 w-4" />
-            )}
-            Conectar Nova Instância
-          </Button>
+          {isPremium && !isSubUser && (
+            <Button
+              onClick={() => router.push('/dashboard/sub-users')}
+              variant="outline"
+              className="h-10 px-4 border-border/60 hover:bg-secondary/80 transition-all"
+            >
+              <Users className="mr-2 h-4 w-4" />
+              Sub-Usuários
+            </Button>
+          )}
+          {!isSubUser && (
+            <Button
+              onClick={handleConnectClick}
+              className={`h-10 px-5 transition-all ${isPremium
+                  ? 'gradient-primary hover:opacity-90 shadow-glow'
+                  : 'bg-muted text-muted-foreground hover:bg-muted/80'
+                }`}
+            >
+              {isPremium ? (
+                <PlusCircle className="mr-2 h-4 w-4" />
+              ) : (
+                <Lock className="mr-2 h-4 w-4" />
+              )}
+              Conectar Nova Instância
+            </Button>
+          )}
         </div>
       </div>
 

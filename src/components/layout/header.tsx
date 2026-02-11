@@ -2,11 +2,12 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { MessageCircle, LogOut, LayoutDashboard, ChevronDown, ShieldCheck } from 'lucide-react';
+import { MessageCircle, LogOut, LayoutDashboard, ChevronDown, ShieldCheck, Users } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { useAuth } from '@/hooks/useAuth';
+import { useAuthContext } from '@/context/AuthContext';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -51,6 +52,7 @@ const NavLink = ({ href, children, icon: Icon }: { href: string; children: React
 
 export function Header() {
   const { user, logout } = useAuth();
+  const { isPremium, isSubUser } = useAuthContext();
 
   return (
     <header className="sticky top-0 z-50 w-full border-b border-border/60 glass">
@@ -60,6 +62,9 @@ export function Header() {
           
           <nav className="hidden md:flex items-center gap-1">
             <NavLink href="/" icon={LayoutDashboard}>Painel</NavLink>
+            {isPremium && !isSubUser && (
+              <NavLink href="/dashboard/sub-users" icon={Users}>Sub-Usuários</NavLink>
+            )}
             {user?.role === 'admin' && (
               <NavLink href="/admin" icon={ShieldCheck}>Admin</NavLink>
             )}
@@ -70,6 +75,9 @@ export function Header() {
           {/* Nav mobile */}
           <div className="md:hidden flex items-center gap-1">
             <NavLink href="/" icon={LayoutDashboard}>Painel</NavLink>
+            {isPremium && !isSubUser && (
+              <NavLink href="/dashboard/sub-users" icon={Users}>Sub-Usuários</NavLink>
+            )}
             {user?.role === 'admin' && (
               <NavLink href="/admin" icon={ShieldCheck}>Admin</NavLink>
             )}

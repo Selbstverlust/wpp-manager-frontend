@@ -71,7 +71,7 @@ export function InstancesGrid(props: Props) {
   const [isLoadingExamples, setIsLoadingExamples] = useState(false);
   const { toast } = useToast();
   const router = useRouter();
-  const { token } = useAuthContext();
+  const { token, isSubUser } = useAuthContext();
 
   useEffect(() => {
     async function fetchConnectionStates() {
@@ -508,15 +508,17 @@ export function InstancesGrid(props: Props) {
                         Editar Prompt
                       </Button>
                     )}
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-9 px-3 text-destructive hover:text-destructive hover:bg-destructive/10"
-                      onClick={() => openDeleteDialog(name)}
-                      title="Excluir instância"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
+                    {!isSubUser && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-9 px-3 text-destructive hover:text-destructive hover:bg-destructive/10"
+                        onClick={() => openDeleteDialog(name)}
+                        title="Excluir instância"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    )}
                   </div>
                 </CardContent>
               )}

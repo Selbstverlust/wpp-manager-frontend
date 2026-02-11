@@ -12,6 +12,7 @@ interface AuthContextValue {
   token: string | null;
   subscription: Subscription | null;
   isPremium: boolean;
+  isSubUser: boolean;
   loading: boolean;
   login: (email: string, password: string) => Promise<void>;
   register: (email: string, name: string, password: string) => Promise<void>;
@@ -96,19 +97,24 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     return subscription?.isPremium ?? false;
   }, [subscription]);
 
+  const isSubUser = useMemo(() => {
+    return !!authState?.user?.parentUserId;
+  }, [authState?.user]);
+
   const value: AuthContextValue = useMemo(
     () => ({
       user: authState?.user ?? null,
       token: authState?.token ?? null,
       subscription,
       isPremium,
+      isSubUser,
       loading,
       login,
       register,
       logout,
       refreshSubscription,
     }),
-    [authState, subscription, isPremium, loading, login, register, logout, refreshSubscription]
+    [authState, subscription, isPremium, isSubUser, loading, login, register, logout, refreshSubscription]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
