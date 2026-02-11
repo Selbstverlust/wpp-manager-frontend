@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { MessageCircle, LogOut, LayoutDashboard, ChevronDown, ShieldCheck, Users } from 'lucide-react';
+import { MessageCircle, LogOut, LayoutDashboard, ChevronDown, ShieldCheck, Users, MessagesSquare } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -62,6 +62,7 @@ export function Header() {
           
           <nav className="hidden md:flex items-center gap-1">
             <NavLink href="/" icon={LayoutDashboard}>Painel</NavLink>
+            <NavLink href="/dashboard/messages" icon={MessagesSquare}>Mensagens</NavLink>
             {isPremium && !isSubUser && (
               <NavLink href="/dashboard/sub-users" icon={Users}>Sub-Usuários</NavLink>
             )}
@@ -75,6 +76,7 @@ export function Header() {
           {/* Nav mobile */}
           <div className="md:hidden flex items-center gap-1">
             <NavLink href="/" icon={LayoutDashboard}>Painel</NavLink>
+            <NavLink href="/dashboard/messages" icon={MessagesSquare}>Mensagens</NavLink>
             {isPremium && !isSubUser && (
               <NavLink href="/dashboard/sub-users" icon={Users}>Sub-Usuários</NavLink>
             )}
