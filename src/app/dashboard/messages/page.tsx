@@ -69,11 +69,22 @@ interface ChatsResponse {
 // Utility helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * Extracts the raw phone-number digits from a JID.
+ * Handles @lid format (`phone:deviceId@lid`) by stripping the `:deviceId`.
+ */
+function extractPhoneDigits(jid: string): string {
+  const local = jid.split('@')[0] || '';
+  // @lid JIDs have format phone:deviceId – strip the device part
+  const colonIdx = local.indexOf(':');
+  return colonIdx >= 0 ? local.slice(0, colonIdx) : local;
+}
+
 function getChatDisplayName(chat: Chat): string {
   if (chat.name && chat.name.trim()) return chat.name;
   if (chat.pushName && chat.pushName.trim()) return chat.pushName;
   const jid = chat.remoteJid || chat.id || '';
-  const number = jid.split('@')[0];
+  const number = extractPhoneDigits(jid);
   if (number) {
     if (number.length > 8) {
       return `+${number.slice(0, 2)} ${number.slice(2, 4)} ${number.slice(4)}`;
@@ -85,7 +96,7 @@ function getChatDisplayName(chat: Chat): string {
 
 function getPhoneFromJid(chat: Chat): string {
   const jid = chat.remoteJid || chat.id || '';
-  const number = jid.split('@')[0];
+  const number = extractPhoneDigits(jid);
   if (!number) return '';
   if (number.length > 8) {
     return `+${number.slice(0, 2)} ${number.slice(2, 4)} ${number.slice(4)}`;
@@ -280,7 +291,7 @@ export default function MessagesPage() {
     }
   }, [token]);
 
-  const fetchMessages = useCallback(async (instanceName: string, remoteJid: string) => {
+  const fetchMessages = useCallback(async (instanceName: string, remoteJid: string, allJids?: string[]) => {
     const backendUrl = process.env.NEXT_PUBLIC_API_URL;
     if (!backendUrl || !token) return;
 
@@ -293,7 +304,13 @@ export default function MessagesPage() {
 
     setLoadingMessages(true);
     try {
-      const url = `${backendUrl.replace(/\/$/, '')}/messages/${encodeURIComponent(instanceName)}/${encodeURIComponent(remoteJid)}`;
+      let url = `${backendUrl.replace(/\/$/, '')}/messages/${encodeURIComponent(instanceName)}/${encodeURIComponent(remoteJid)}`;
+      // Pass all known JID variants (including @lid) so the backend can
+      // query sent messages stored under alternate JID formats.
+      if (allJids && allJids.length > 0) {
+        const encoded = allJids.map((j) => encodeURIComponent(j)).join(',');
+        url += `?allJids=${encoded}`;
+      }
       const response = await fetch(url, {
         method: 'GET',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
@@ -356,7 +373,7 @@ export default function MessagesPage() {
   useEffect(() => {
     if (selectedChat) {
       const jid = selectedChat.remoteJid || selectedChat.id || '';
-      if (jid) fetchMessages(selectedChat.instanceName, jid);
+      if (jid) fetchMessages(selectedChat.instanceName, jid, selectedChat._allJids);
     } else {
       setMessages([]);
     }
@@ -375,16 +392,13 @@ export default function MessagesPage() {
     if (!data?.chats) return [];
     return data.chats.filter((chat) => {
       if (isStatusBroadcast(chat)) return false;
-      // Filter out @lid JIDs (internal WhatsApp identifiers, not real phone numbers)
-      const jid = chat.remoteJid || chat.id || '';
-      if (jid.endsWith('@lid')) return false;
       if (selectedInstance && chat.instanceName !== selectedInstance) return false;
       if (search.trim()) {
         const query = search.toLowerCase();
         const name = getChatDisplayName(chat).toLowerCase();
-        const jidLower = jid.toLowerCase();
+        const jid = (chat.remoteJid || chat.id || '').toLowerCase();
         const preview = getLastMessagePreview(chat).text.toLowerCase();
-        return name.includes(query) || jidLower.includes(query) || preview.includes(query);
+        return name.includes(query) || jid.includes(query) || preview.includes(query);
       }
       return true;
     });
