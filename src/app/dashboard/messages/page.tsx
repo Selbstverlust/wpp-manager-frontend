@@ -11,7 +11,6 @@ import {
   RefreshCw,
   Wifi,
   WifiOff,
-  User,
   Image as ImageIcon,
   Video,
   FileText,
@@ -434,6 +433,8 @@ export default function MessagesPage() {
   const filteredChats = useMemo(() => {
     if (!data?.chats) return [];
     return data.chats.filter((chat) => {
+      // Only show individual (1-to-1) chats – ignore groups and broadcasts
+      if (isGroupChat(chat)) return false;
       if (isStatusBroadcast(chat)) return false;
       if (selectedInstance && chat.instanceName !== selectedInstance) return false;
       if (search.trim()) {
@@ -616,7 +617,6 @@ export default function MessagesPage() {
                 {filteredChats.map((chat, index) => {
                   const displayName = getChatDisplayName(chat);
                   const initials = getInitials(displayName);
-                  const isGroup = isGroupChat(chat);
                   const timestamp = formatTimestamp(getChatTimestamp(chat));
                   const { text: preview, icon: previewIcon } = getLastMessagePreview(chat);
                   const unread = chat.unreadCount || 0;
@@ -639,12 +639,9 @@ export default function MessagesPage() {
                       {/* Avatar */}
                       <div className="relative flex-shrink-0">
                         <div
-                          className={cn(
-                            'w-11 h-11 rounded-full flex items-center justify-center text-xs font-semibold',
-                            isGroup ? 'bg-secondary text-secondary-foreground' : 'bg-primary/10 text-primary'
-                          )}
+                          className="w-11 h-11 rounded-full flex items-center justify-center text-xs font-semibold bg-primary/10 text-primary"
                         >
-                          {isGroup ? <User className="h-5 w-5" /> : initials}
+                          {initials}
                         </div>
                         {unread > 0 && (
                           <span className="absolute -top-0.5 -right-0.5 w-[18px] h-[18px] rounded-full bg-primary text-primary-foreground text-[9px] font-bold flex items-center justify-center shadow-sm">
@@ -726,12 +723,9 @@ export default function MessagesPage() {
 
                   {/* Avatar */}
                   <div
-                    className={cn(
-                      'w-10 h-10 rounded-full flex items-center justify-center text-xs font-semibold flex-shrink-0',
-                      isGroupChat(selectedChat) ? 'bg-secondary text-secondary-foreground' : 'bg-primary/10 text-primary'
-                    )}
+                    className="w-10 h-10 rounded-full flex items-center justify-center text-xs font-semibold flex-shrink-0 bg-primary/10 text-primary"
                   >
-                    {isGroupChat(selectedChat) ? <User className="h-5 w-5" /> : getInitials(getChatDisplayName(selectedChat))}
+                    {getInitials(getChatDisplayName(selectedChat))}
                   </div>
 
                   <div className="min-w-0">
