@@ -38,10 +38,16 @@ interface Chat {
   name?: string;
   pushName?: string;
   profilePicUrl?: string;
+  /** @deprecated – not returned by Evolution API v2; use lastMessage.messageTimestamp */
   lastMsgTimestamp?: number | string | { low: number; high: number };
+  /** @deprecated – not returned by Evolution API v2; use lastMessage.messageTimestamp */
   conversationTimestamp?: number | string | { low: number; high: number };
+  /** ISO date string from Evolution API v2 */
+  updatedAt?: string;
   unreadCount?: number;
   lastMessage?: any;
+  /** All known JID variants for this chat (injected by backend dedup) */
+  _allJids?: string[];
   instanceName: string;
   archived?: boolean;
   [key: string]: any;
@@ -104,6 +110,28 @@ function isGroupChat(chat: Chat): boolean {
 function isStatusBroadcast(chat: Chat): boolean {
   const jid = chat.remoteJid || chat.id || '';
   return jid === 'status@broadcast';
+}
+
+/**
+ * Extracts the best-available timestamp from a chat object.
+ *
+ * Evolution API v2 returns the timestamp inside `lastMessage.messageTimestamp`
+ * (unix seconds) and/or `updatedAt` (ISO date string).  Legacy fields
+ * `lastMsgTimestamp` / `conversationTimestamp` are also checked as a fallback.
+ */
+function getChatTimestamp(
+  chat: Chat,
+): number | string | { low: number; high: number } | undefined {
+  // Prefer the message-level timestamp
+  const msgTs = chat.lastMessage?.messageTimestamp;
+  if (msgTs) return msgTs;
+  // Then updatedAt (ISO string → parse to unix seconds)
+  if (chat.updatedAt) {
+    const ms = new Date(chat.updatedAt).getTime();
+    if (!isNaN(ms)) return Math.floor(ms / 1000);
+  }
+  // Legacy fallbacks
+  return chat.lastMsgTimestamp || chat.conversationTimestamp;
 }
 
 function getLastMessagePreview(chat: Chat): { text: string; icon?: React.ReactNode } {
@@ -321,13 +349,16 @@ export default function MessagesPage() {
     if (!data?.chats) return [];
     return data.chats.filter((chat) => {
       if (isStatusBroadcast(chat)) return false;
+      // Filter out @lid JIDs (internal WhatsApp identifiers, not real phone numbers)
+      const jid = chat.remoteJid || chat.id || '';
+      if (jid.endsWith('@lid')) return false;
       if (selectedInstance && chat.instanceName !== selectedInstance) return false;
       if (search.trim()) {
         const query = search.toLowerCase();
         const name = getChatDisplayName(chat).toLowerCase();
-        const jid = (chat.remoteJid || chat.id || '').toLowerCase();
+        const jidLower = jid.toLowerCase();
         const preview = getLastMessagePreview(chat).text.toLowerCase();
-        return name.includes(query) || jid.includes(query) || preview.includes(query);
+        return name.includes(query) || jidLower.includes(query) || preview.includes(query);
       }
       return true;
     });
@@ -503,7 +534,7 @@ export default function MessagesPage() {
                   const displayName = getChatDisplayName(chat);
                   const initials = getInitials(displayName);
                   const isGroup = isGroupChat(chat);
-                  const timestamp = formatTimestamp(chat.lastMsgTimestamp || chat.conversationTimestamp);
+                  const timestamp = formatTimestamp(getChatTimestamp(chat));
                   const { text: preview, icon: previewIcon } = getLastMessagePreview(chat);
                   const unread = chat.unreadCount || 0;
                   const chatKey = `${chat.instanceName}-${chat.remoteJid || chat.id || index}`;
