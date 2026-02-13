@@ -257,6 +257,9 @@ export default function MessagesPage() {
   const [loadingMessages, setLoadingMessages] = useState(false);
   const { token } = useAuthContext();
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  // AbortController ref to cancel stale message fetches when the user
+  // switches to a different chat before the previous request completes.
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   // ---- Data fetching ----
 
@@ -280,6 +283,14 @@ export default function MessagesPage() {
   const fetchMessages = useCallback(async (instanceName: string, remoteJid: string) => {
     const backendUrl = process.env.NEXT_PUBLIC_API_URL;
     if (!backendUrl || !token) return;
+
+    // Cancel any in-flight request for a previous chat
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     setLoadingMessages(true);
     try {
       const url = `${backendUrl.replace(/\/$/, '')}/messages/${encodeURIComponent(instanceName)}/${encodeURIComponent(remoteJid)}`;
@@ -287,8 +298,18 @@ export default function MessagesPage() {
         method: 'GET',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         cache: 'no-store',
+        signal: controller.signal,
       });
+
+      // If this request was aborted (user clicked another chat), bail out
+      // silently – the newer request will handle state updates.
+      if (controller.signal.aborted) return;
+
       const json = await response.json().catch(() => null);
+
+      // Double-check after async .json() parse
+      if (controller.signal.aborted) return;
+
       if (response.ok && json?.messages) {
         // Sort ascending by messageTimestamp (oldest first)
         const sorted = [...json.messages].sort((a: any, b: any) => {
@@ -301,11 +322,16 @@ export default function MessagesPage() {
         console.error('Failed to fetch messages:', json);
         setMessages([]);
       }
-    } catch (error) {
+    } catch (error: any) {
+      // Aborted fetches throw DOMException with name 'AbortError' – ignore them
+      if (error?.name === 'AbortError') return;
       console.error('Error fetching messages:', error);
       setMessages([]);
     } finally {
-      setLoadingMessages(false);
+      // Only clear loading if this is still the active request
+      if (!controller.signal.aborted) {
+        setLoadingMessages(false);
+      }
     }
   }, [token]);
 
