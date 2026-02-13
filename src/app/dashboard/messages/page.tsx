@@ -308,6 +308,8 @@ export default function MessagesPage() {
   const [selectedChat, setSelectedChat] = useState<Chat | null>(null);
   const [messages, setMessages] = useState<any[]>([]);
   const [loadingMessages, setLoadingMessages] = useState(false);
+  const [messageInput, setMessageInput] = useState('');
+  const [sending, setSending] = useState(false);
   const { token } = useAuthContext();
   const messagesEndRef = useRef<HTMLDivElement>(null);
   // AbortController ref to cancel stale message fetches when the user
@@ -406,6 +408,57 @@ export default function MessagesPage() {
     setRefreshing(false);
   }
 
+  const sendMessage = useCallback(async () => {
+    const backendUrl = process.env.NEXT_PUBLIC_API_URL;
+    if (!backendUrl || !token || !selectedChat || !messageInput.trim()) return;
+
+    const jid = selectedChat.remoteJid || selectedChat.id || '';
+    if (!jid) return;
+
+    // Extract the phone number from the JID (part before @)
+    const number = jid.split('@')[0] || '';
+    if (!number) return;
+
+    setSending(true);
+    try {
+      const url = `${backendUrl.replace(/\/$/, '')}/messages/${encodeURIComponent(selectedChat.instanceName)}/send-text`;
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          number,
+          text: messageInput.trim(),
+        }),
+      });
+
+      const json = await response.json().catch(() => null);
+
+      if (response.ok && json) {
+        // Clear the input
+        setMessageInput('');
+        // Append the sent message to the local list so it appears immediately
+        setMessages((prev) => [
+          ...prev,
+          {
+            key: json.key || {},
+            message: json.message || {},
+            messageTimestamp: json.messageTimestamp || String(Math.floor(Date.now() / 1000)),
+            status: json.status || 'PENDING',
+          },
+        ]);
+      } else {
+        console.error('Failed to send message:', json);
+      }
+    } catch (error) {
+      console.error('Error sending message:', error);
+    } finally {
+      setSending(false);
+    }
+  }, [token, selectedChat, messageInput]);
+
   useEffect(() => {
     if (token) loadChats();
     else setLoading(false);
@@ -454,11 +507,13 @@ export default function MessagesPage() {
 
   function handleSelectChat(chat: Chat) {
     setSelectedChat(chat);
+    setMessageInput('');
   }
 
   function handleCloseChat() {
     setSelectedChat(null);
     setMessages([]);
+    setMessageInput('');
   }
 
   // ---- Loading state ----
@@ -807,22 +862,36 @@ export default function MessagesPage() {
                 )}
               </div>
 
-              {/* ---- Input area (placeholder) ---- */}
+              {/* ---- Input area ---- */}
               <div className="flex-shrink-0 border-t border-border/60 bg-card/50 backdrop-blur-sm px-4 sm:px-6 py-3">
-                <div className="flex items-center gap-3">
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    sendMessage();
+                  }}
+                  className="flex items-center gap-3"
+                >
                   <Input
                     type="text"
-                    placeholder="Digite uma mensagem para enviar..."
-                    disabled
-                    className="flex-1 h-10 text-sm opacity-60"
+                    placeholder="Digite uma mensagem..."
+                    value={messageInput}
+                    onChange={(e) => setMessageInput(e.target.value)}
+                    disabled={sending}
+                    className="flex-1 h-10 text-sm"
                   />
-                  <Button size="icon" disabled className="h-10 w-10 rounded-xl opacity-60">
-                    <Send className="h-4 w-4" />
+                  <Button
+                    type="submit"
+                    size="icon"
+                    disabled={sending || !messageInput.trim()}
+                    className="h-10 w-10 rounded-xl"
+                  >
+                    {sending ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Send className="h-4 w-4" />
+                    )}
                   </Button>
-                </div>
-                <p className="text-[10px] text-muted-foreground/60 mt-1.5 text-center">
-                  Envio de mensagens em breve
-                </p>
+                </form>
               </div>
             </>
           ) : (
