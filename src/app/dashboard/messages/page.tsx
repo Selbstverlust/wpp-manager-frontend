@@ -145,10 +145,53 @@ function getChatTimestamp(
   return chat.lastMsgTimestamp || chat.conversationTimestamp;
 }
 
+/**
+ * Peels off WhatsApp wrapper types that nest the real content one (or more)
+ * levels deep inside a `.message` property.
+ *
+ * Known wrappers:
+ *   - deviceSentMessage   – messages sent from a specific device
+ *   - ephemeralMessage     – disappearing messages
+ *   - viewOnceMessage      – view-once media (v1)
+ *   - viewOnceMessageV2    – view-once media (v2)
+ *   - documentWithCaptionMessage – documents with captions
+ *   - editedMessage        – edited message content
+ *   - templateMessage      – template wrapper (may nest real content)
+ *
+ * Multiple levels of wrapping can occur (e.g. an ephemeral message sent
+ * from a device), so we loop until no more wrappers are found.
+ */
+const MESSAGE_WRAPPERS = [
+  'deviceSentMessage',
+  'ephemeralMessage',
+  'viewOnceMessage',
+  'viewOnceMessageV2',
+  'documentWithCaptionMessage',
+  'editedMessage',
+] as const;
+
+function unwrapMessage(raw: any): any {
+  let message = raw?.message ?? raw;
+  if (!message || typeof message !== 'object') return message;
+
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const wrapper of MESSAGE_WRAPPERS) {
+      if (message[wrapper]?.message) {
+        message = message[wrapper].message;
+        changed = true;
+        break; // restart loop after each unwrap
+      }
+    }
+  }
+  return message;
+}
+
 function getLastMessagePreview(chat: Chat): { text: string; icon?: React.ReactNode } {
   const msg = chat.lastMessage;
   if (!msg) return { text: '' };
-  const message = msg.message || msg;
+  const message = unwrapMessage(msg);
   if (message.conversation) return { text: message.conversation };
   if (message.extendedTextMessage?.text) return { text: message.extendedTextMessage.text };
   if (message.imageMessage) return { text: message.imageMessage.caption || 'Foto', icon: <ImageIcon className="h-3.5 w-3.5 flex-shrink-0" /> };
@@ -174,7 +217,7 @@ function getLastMessagePreview(chat: Chat): { text: string; icon?: React.ReactNo
  * Extracts readable text from a message object (used in the chat thread bubbles).
  */
 function getMessageText(msg: any): { text: string; icon?: React.ReactNode } {
-  const message = msg.message || msg;
+  const message = unwrapMessage(msg);
   if (message.conversation) return { text: message.conversation };
   if (message.extendedTextMessage?.text) return { text: message.extendedTextMessage.text };
   if (message.imageMessage) return { text: message.imageMessage.caption || 'Foto', icon: <ImageIcon className="h-4 w-4 flex-shrink-0 opacity-70" /> };
