@@ -304,7 +304,6 @@ export default function MessagesPage() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [search, setSearch] = useState('');
-  const [selectedInstance, setSelectedInstance] = useState<string | null>(null);
   const [selectedChat, setSelectedChat] = useState<Chat | null>(null);
   const [messages, setMessages] = useState<any[]>([]);
   const [loadingMessages, setLoadingMessages] = useState(false);
@@ -483,25 +482,32 @@ export default function MessagesPage() {
 
   // ---- Derived data ----
 
-  const filteredChats = useMemo(() => {
-    if (!data?.chats) return [];
-    return data.chats.filter((chat) => {
-      // Only show individual (1-to-1) chats – ignore groups and broadcasts
-      if (isGroupChat(chat)) return false;
-      if (isStatusBroadcast(chat)) return false;
-      if (selectedInstance && chat.instanceName !== selectedInstance) return false;
+  const instances = data?.instances || [];
+
+  /** Group chats by instance (only connected instances with chats) */
+  const chatsByInstance = useMemo(() => {
+    if (!data?.chats) return new Map<string, Chat[]>();
+    const map = new Map<string, Chat[]>();
+    // Initialise columns for every connected instance so they appear even if empty
+    for (const inst of data.instances || []) {
+      if (inst.connected) map.set(inst.name, []);
+    }
+    for (const chat of data.chats) {
+      if (isGroupChat(chat)) continue;
+      if (isStatusBroadcast(chat)) continue;
       if (search.trim()) {
         const query = search.toLowerCase();
         const name = getChatDisplayName(chat).toLowerCase();
         const jid = (chat.remoteJid || chat.id || '').toLowerCase();
         const preview = getLastMessagePreview(chat).text.toLowerCase();
-        return name.includes(query) || jid.includes(query) || preview.includes(query);
+        if (!name.includes(query) && !jid.includes(query) && !preview.includes(query)) continue;
       }
-      return true;
-    });
-  }, [data?.chats, search, selectedInstance]);
-
-  const instances = data?.instances || [];
+      const arr = map.get(chat.instanceName) || [];
+      arr.push(chat);
+      map.set(chat.instanceName, arr);
+    }
+    return map;
+  }, [data?.chats, data?.instances, search]);
 
   // ---- Handlers ----
 
@@ -571,7 +577,7 @@ export default function MessagesPage() {
     : null;
 
   // =======================================================================
-  // RENDER: Two-panel layout
+  // RENDER: Kanban Board + Chat Panel layout
   // =======================================================================
 
   return (
@@ -579,20 +585,19 @@ export default function MessagesPage() {
       <div className="flex h-full">
 
         {/* ================================================================ */}
-        {/* LEFT PANEL                                                       */}
+        {/* LEFT PANEL – Kanban Board                                        */}
         {/* ================================================================ */}
         <div
           className={cn(
             'flex flex-col border-r border-border/60 bg-card/30 backdrop-blur-sm',
-            // Responsive: on mobile, hide left panel when chat is open
             selectedChat ? 'hidden lg:flex' : 'flex',
-            'w-full lg:w-[380px] lg:min-w-[380px] lg:max-w-[380px]',
+            'w-full lg:w-1/2 lg:min-w-0',
           )}
         >
-          {/* Instance list */}
+          {/* Top bar: title + search + refresh */}
           <div className="flex-shrink-0 border-b border-border/50">
-            <div className="px-4 pt-4 pb-2 flex items-center justify-between">
-              <div className="flex items-center gap-3">
+            <div className="px-4 pt-4 pb-3 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3 flex-shrink-0">
                 <div className="w-9 h-9 rounded-lg gradient-primary flex items-center justify-center shadow-glow">
                   <MessageCircle className="h-4.5 w-4.5 text-white" />
                 </div>
@@ -603,164 +608,151 @@ export default function MessagesPage() {
                   </p>
                 </div>
               </div>
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={refreshChats}
-                disabled={refreshing}
-                className="h-8 w-8"
-              >
-                <RefreshCw className={cn('h-4 w-4', refreshing && 'animate-spin')} />
-              </Button>
-            </div>
-
-            {/* Instance filter buttons */}
-            {instances.length > 0 && (
-              <div className="px-4 pb-3 flex flex-wrap gap-1.5">
-                <button
-                  onClick={() => setSelectedInstance(null)}
-                  className={cn(
-                    'inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium transition-all duration-200 border',
-                    selectedInstance === null
-                      ? 'bg-primary text-primary-foreground border-primary shadow-sm'
-                      : 'bg-card text-muted-foreground border-border hover:bg-secondary/80'
-                  )}
+              <div className="flex items-center gap-2 flex-1 max-w-xs">
+                <div className="relative flex-1">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    type="text"
+                    placeholder="Buscar conversas..."
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    className="pl-9 h-9 text-sm"
+                  />
+                </div>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={refreshChats}
+                  disabled={refreshing}
+                  className="h-9 w-9 flex-shrink-0"
                 >
-                  Todas
-                </button>
-                {instances.map((inst) => (
-                  <button
-                    key={inst.name}
-                    onClick={() => setSelectedInstance(selectedInstance === inst.name ? null : inst.name)}
-                    className={cn(
-                      'inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium transition-all duration-200 border',
-                      selectedInstance === inst.name
-                        ? 'bg-primary text-primary-foreground border-primary shadow-sm'
-                        : 'bg-card text-muted-foreground border-border hover:bg-secondary/80'
-                    )}
-                  >
-                    {inst.connected ? (
-                      <span className={cn('w-2 h-2 rounded-full', getInstanceDotColor(inst.name))} />
-                    ) : (
-                      <WifiOff className="h-3 w-3 text-destructive" />
-                    )}
-                    {inst.name}
-                  </button>
-                ))}
+                  <RefreshCw className={cn('h-4 w-4', refreshing && 'animate-spin')} />
+                </Button>
               </div>
-            )}
-          </div>
-
-          {/* Search */}
-          <div className="flex-shrink-0 px-3 py-2.5 border-b border-border/50">
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input
-                type="text"
-                placeholder="Buscar conversas..."
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                className="pl-9 h-9 text-sm"
-              />
             </div>
           </div>
 
-          {/* Chat list */}
-          <ScrollArea className="flex-1">
-            {filteredChats.length > 0 ? (
-              <div className="divide-y divide-border/40">
-                {filteredChats.map((chat, index) => {
-                  const displayName = getChatDisplayName(chat);
-                  const initials = getInitials(displayName);
-                  const timestamp = formatTimestamp(getChatTimestamp(chat));
-                  const { text: preview, icon: previewIcon } = getLastMessagePreview(chat);
-                  const unread = chat.unreadCount || 0;
-                  const chatKey = `${chat.instanceName}-${chat.remoteJid || chat.id || index}`;
-                  const isSelected = chatKey === selectedChatKey;
-                  const instanceColor = getInstanceColor(chat.instanceName);
+          {/* Kanban columns */}
+          <div className="flex-1 overflow-x-auto overflow-y-hidden">
+            <div className="flex gap-3 p-3 h-full min-w-max">
+              {Array.from(chatsByInstance.entries()).map(([instanceName, chats]) => {
+                const inst = instances.find((i) => i.name === instanceName);
+                const dotColor = getInstanceDotColor(instanceName);
 
-                  return (
-                    <button
-                      key={chatKey}
-                      onClick={() => handleSelectChat(chat)}
-                      className={cn(
-                        'w-full flex items-center gap-3 px-4 py-3 transition-colors duration-150 text-left',
-                        isSelected
-                          ? 'bg-primary/10 border-l-2 border-l-primary'
-                          : 'hover:bg-secondary/40 border-l-2 border-l-transparent',
-                        unread > 0 && !isSelected && 'bg-primary/[0.03]'
-                      )}
-                    >
-                      {/* Avatar */}
-                      <div className="relative flex-shrink-0">
-                        <div
-                          className="w-11 h-11 rounded-full flex items-center justify-center text-xs font-semibold bg-primary/10 text-primary"
-                        >
-                          {initials}
-                        </div>
-                        {unread > 0 && (
-                          <span className="absolute -top-0.5 -right-0.5 w-[18px] h-[18px] rounded-full bg-primary text-primary-foreground text-[9px] font-bold flex items-center justify-center shadow-sm">
-                            {unread > 99 ? '99+' : unread}
-                          </span>
-                        )}
+                return (
+                  <div
+                    key={instanceName}
+                    className="w-[280px] flex-shrink-0 flex flex-col rounded-xl bg-secondary/30 border border-border/50"
+                  >
+                    {/* Column header */}
+                    <div className="flex items-center justify-between px-3 py-2.5 border-b border-border/40">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className={cn('w-2.5 h-2.5 rounded-full flex-shrink-0', dotColor)} />
+                        <span className="text-sm font-semibold text-foreground truncate">{instanceName}</span>
                       </div>
+                      <span className="inline-flex items-center justify-center rounded-full bg-primary/10 text-primary text-[11px] font-bold px-2 py-0.5 flex-shrink-0">
+                        {chats.length}
+                      </span>
+                    </div>
 
-                      {/* Info */}
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center justify-between gap-1.5 mb-0.5">
-                          <div className="flex items-center gap-1.5 min-w-0">
-                            <span className={cn('text-sm truncate', unread > 0 ? 'font-semibold text-foreground' : 'font-medium text-foreground')}>
-                              {displayName}
-                            </span>
-                            {instances.length > 1 && (
-                              <span className={cn('inline-flex items-center rounded px-1 py-0.5 text-[9px] font-medium flex-shrink-0', instanceColor)}>
-                                {chat.instanceName}
-                              </span>
-                            )}
-                          </div>
-                          {timestamp && (
-                            <span className={cn('text-[11px] flex-shrink-0', unread > 0 ? 'text-primary font-semibold' : 'text-muted-foreground')}>
-                              {timestamp}
-                            </span>
-                          )}
-                        </div>
-                        {preview && (
-                          <div className="flex items-center gap-1">
-                            {previewIcon && <span className="text-muted-foreground">{previewIcon}</span>}
-                            <p className={cn('text-xs truncate', unread > 0 ? 'text-foreground/80' : 'text-muted-foreground')}>
-                              {preview}
+                    {/* Column body — scrollable chat cards */}
+                    <ScrollArea className="flex-1">
+                      <div className="p-2 space-y-2">
+                        {chats.length > 0 ? (
+                          chats.map((chat, index) => {
+                            const displayName = getChatDisplayName(chat);
+                            const initials = getInitials(displayName);
+                            const timestamp = formatTimestamp(getChatTimestamp(chat));
+                            const { text: preview, icon: previewIcon } = getLastMessagePreview(chat);
+                            const unread = chat.unreadCount || 0;
+                            const chatKey = `${chat.instanceName}-${chat.remoteJid || chat.id || index}`;
+                            const isSelected = chatKey === selectedChatKey;
+
+                            return (
+                              <button
+                                key={chatKey}
+                                onClick={() => handleSelectChat(chat)}
+                                className={cn(
+                                  'w-full rounded-lg border p-2.5 text-left transition-all duration-150',
+                                  isSelected
+                                    ? 'bg-primary/10 border-primary/40 shadow-sm ring-1 ring-primary/20'
+                                    : 'bg-card border-border/50 hover:border-border hover:shadow-sm',
+                                  unread > 0 && !isSelected && 'border-primary/20 bg-primary/[0.03]'
+                                )}
+                              >
+                                <div className="flex items-start gap-2.5">
+                                  {/* Avatar */}
+                                  <div className="relative flex-shrink-0">
+                                    <div className="w-9 h-9 rounded-full flex items-center justify-center text-[10px] font-semibold bg-primary/10 text-primary">
+                                      {initials}
+                                    </div>
+                                    {unread > 0 && (
+                                      <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-primary text-primary-foreground text-[8px] font-bold flex items-center justify-center shadow-sm">
+                                        {unread > 99 ? '99+' : unread}
+                                      </span>
+                                    )}
+                                  </div>
+
+                                  {/* Info */}
+                                  <div className="flex-1 min-w-0">
+                                    <div className="flex items-center justify-between gap-1 mb-0.5">
+                                      <span className={cn('text-xs truncate', unread > 0 ? 'font-semibold text-foreground' : 'font-medium text-foreground')}>
+                                        {displayName}
+                                      </span>
+                                      {timestamp && (
+                                        <span className={cn('text-[10px] flex-shrink-0', unread > 0 ? 'text-primary font-semibold' : 'text-muted-foreground')}>
+                                          {timestamp}
+                                        </span>
+                                      )}
+                                    </div>
+                                    {preview && (
+                                      <div className="flex items-center gap-1">
+                                        {previewIcon && <span className="text-muted-foreground">{previewIcon}</span>}
+                                        <p className={cn('text-[11px] truncate leading-snug', unread > 0 ? 'text-foreground/80' : 'text-muted-foreground')}>
+                                          {preview}
+                                        </p>
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                              </button>
+                            );
+                          })
+                        ) : (
+                          <div className="flex flex-col items-center justify-center py-8 px-2 text-center">
+                            <MessageCircle className="h-6 w-6 text-muted-foreground/30 mb-2" />
+                            <p className="text-[11px] text-muted-foreground">
+                              {search.trim() ? 'Nenhum resultado' : 'Sem conversas'}
                             </p>
                           </div>
                         )}
                       </div>
-                    </button>
-                  );
-                })}
-              </div>
-            ) : search.trim() ? (
-              <div className="flex flex-col items-center justify-center py-16 px-4 text-center">
-                <Search className="h-8 w-8 text-muted-foreground/40 mb-3" />
-                <p className="text-sm font-medium text-foreground">Nenhum resultado</p>
-                <p className="text-xs text-muted-foreground mt-1">Tente uma busca diferente</p>
-              </div>
-            ) : (
-              <div className="flex flex-col items-center justify-center py-16 px-4 text-center">
-                <MessageCircle className="h-8 w-8 text-muted-foreground/40 mb-3" />
-                <p className="text-sm font-medium text-foreground">Nenhuma conversa</p>
-                <p className="text-xs text-muted-foreground mt-1">Aguardando mensagens...</p>
-              </div>
-            )}
-          </ScrollArea>
+                    </ScrollArea>
+                  </div>
+                );
+              })}
+
+              {/* Show a hint when there are no columns at all */}
+              {chatsByInstance.size === 0 && (
+                <div className="flex items-center justify-center w-full">
+                  <div className="text-center px-6">
+                    <MessageCircle className="h-8 w-8 text-muted-foreground/30 mx-auto mb-3" />
+                    <p className="text-sm text-muted-foreground">Nenhuma instância conectada</p>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
 
         {/* ================================================================ */}
-        {/* RIGHT PANEL                                                      */}
+        {/* RIGHT PANEL – Chat conversation                                  */}
         {/* ================================================================ */}
         <div
           className={cn(
-            'flex-1 flex flex-col min-w-0',
-            // Responsive: on mobile, hide right panel when no chat is selected
+            'flex flex-col min-w-0',
             selectedChat ? 'flex' : 'hidden lg:flex',
+            'w-full lg:w-1/2',
           )}
         >
           {selectedChat ? (
@@ -787,11 +779,9 @@ export default function MessagesPage() {
                     <p className="text-sm font-semibold text-foreground truncate">{getChatDisplayName(selectedChat)}</p>
                     <div className="flex items-center gap-2">
                       <p className="text-xs text-muted-foreground truncate">{getPhoneFromJid(selectedChat)}</p>
-                      {instances.length > 1 && (
-                        <span className={cn('inline-flex items-center rounded px-1 py-0.5 text-[9px] font-medium', getInstanceColor(selectedChat.instanceName))}>
-                          {selectedChat.instanceName}
-                        </span>
-                      )}
+                      <span className={cn('inline-flex items-center rounded px-1 py-0.5 text-[9px] font-medium', getInstanceColor(selectedChat.instanceName))}>
+                        {selectedChat.instanceName}
+                      </span>
                     </div>
                   </div>
                 </div>
@@ -905,7 +895,7 @@ export default function MessagesPage() {
                   Selecione uma conversa
                 </h2>
                 <p className="text-sm text-muted-foreground max-w-xs mx-auto">
-                  Escolha uma conversa na lista à esquerda para visualizar as mensagens.
+                  Escolha uma conversa no painel à esquerda para visualizar as mensagens.
                 </p>
               </div>
             </div>
