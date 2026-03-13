@@ -23,9 +23,34 @@ import {
   Send,
   CheckCheck,
   Check,
+  Plus,
+  MoreHorizontal,
+  ChevronDown,
+  ChevronRight,
+  FolderOpen,
+  Tag,
+  Pencil,
+  Trash2,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from '@/components/ui/dialog';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -64,17 +89,28 @@ interface ChatsResponse {
   connectedInstances: number;
 }
 
+interface Category {
+  id: string;
+  name: string;
+  color: string | null;
+  position: number;
+  userId: string;
+}
+
+interface ChatCategoryAssignment {
+  id: string;
+  categoryId: string;
+  remoteJid: string;
+  instanceName: string;
+  userId: string;
+}
+
 // ---------------------------------------------------------------------------
 // Utility helpers
 // ---------------------------------------------------------------------------
 
-/**
- * Extracts the raw phone-number digits from a JID.
- * Handles @lid format (`phone:deviceId@lid`) by stripping the `:deviceId`.
- */
 function extractPhoneDigits(jid: string): string {
   const local = jid.split('@')[0] || '';
-  // @lid JIDs have format phone:deviceId – strip the device part
   const colonIdx = local.indexOf(':');
   return colonIdx >= 0 ? local.slice(0, colonIdx) : local;
 }
@@ -122,44 +158,18 @@ function isStatusBroadcast(chat: Chat): boolean {
   return jid === 'status@broadcast';
 }
 
-/**
- * Extracts the best-available timestamp from a chat object.
- *
- * Evolution API v2 returns the timestamp inside `lastMessage.messageTimestamp`
- * (unix seconds) and/or `updatedAt` (ISO date string).  Legacy fields
- * `lastMsgTimestamp` / `conversationTimestamp` are also checked as a fallback.
- */
 function getChatTimestamp(
   chat: Chat,
 ): number | string | { low: number; high: number } | undefined {
-  // Prefer the message-level timestamp
   const msgTs = chat.lastMessage?.messageTimestamp;
   if (msgTs) return msgTs;
-  // Then updatedAt (ISO string → parse to unix seconds)
   if (chat.updatedAt) {
     const ms = new Date(chat.updatedAt).getTime();
     if (!isNaN(ms)) return Math.floor(ms / 1000);
   }
-  // Legacy fallbacks
   return chat.lastMsgTimestamp || chat.conversationTimestamp;
 }
 
-/**
- * Peels off WhatsApp wrapper types that nest the real content one (or more)
- * levels deep inside a `.message` property.
- *
- * Known wrappers:
- *   - deviceSentMessage   – messages sent from a specific device
- *   - ephemeralMessage     – disappearing messages
- *   - viewOnceMessage      – view-once media (v1)
- *   - viewOnceMessageV2    – view-once media (v2)
- *   - documentWithCaptionMessage – documents with captions
- *   - editedMessage        – edited message content
- *   - templateMessage      – template wrapper (may nest real content)
- *
- * Multiple levels of wrapping can occur (e.g. an ephemeral message sent
- * from a device), so we loop until no more wrappers are found.
- */
 const MESSAGE_WRAPPERS = [
   'deviceSentMessage',
   'ephemeralMessage',
@@ -172,7 +182,6 @@ const MESSAGE_WRAPPERS = [
 function unwrapMessage(raw: any): any {
   let message = raw?.message ?? raw;
   if (!message || typeof message !== 'object') return message;
-
   let changed = true;
   while (changed) {
     changed = false;
@@ -180,7 +189,7 @@ function unwrapMessage(raw: any): any {
       if (message[wrapper]?.message) {
         message = message[wrapper].message;
         changed = true;
-        break; // restart loop after each unwrap
+        break;
       }
     }
   }
@@ -212,9 +221,6 @@ function getLastMessagePreview(chat: Chat): { text: string; icon?: React.ReactNo
   return { text: '' };
 }
 
-/**
- * Extracts readable text from a message object (used in the chat thread bubbles).
- */
 function getMessageText(msg: any): { text: string; icon?: React.ReactNode } {
   const message = unwrapMessage(msg);
   if (message.conversation) return { text: message.conversation };
@@ -295,6 +301,16 @@ function getInstanceDotColor(name: string): string {
   return colors[Math.abs(hash) % colors.length];
 }
 
+const CATEGORY_COLORS = [
+  '#3b82f6', '#10b981', '#8b5cf6', '#f59e0b',
+  '#ef4444', '#06b6d4', '#f97316', '#6366f1',
+  '#ec4899', '#14b8a6', '#84cc16', '#a855f7',
+];
+
+function getChatKey(chat: Chat): string {
+  return `${chat.instanceName}::${chat.remoteJid || chat.id || ''}`;
+}
+
 // ---------------------------------------------------------------------------
 // Page component
 // ---------------------------------------------------------------------------
@@ -311,17 +327,27 @@ export default function MessagesPage() {
   const [sending, setSending] = useState(false);
   const { token } = useAuthContext();
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  // AbortController ref to cancel stale message fetches when the user
-  // switches to a different chat before the previous request completes.
   const abortControllerRef = useRef<AbortController | null>(null);
+
+  // ---- Categories state ----
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [assignments, setAssignments] = useState<ChatCategoryAssignment[]>([]);
+  const [expandedInstances, setExpandedInstances] = useState<Set<string>>(new Set());
+
+  // ---- Category dialog state ----
+  const [categoryDialogOpen, setCategoryDialogOpen] = useState(false);
+  const [editingCategory, setEditingCategory] = useState<Category | null>(null);
+  const [categoryName, setCategoryName] = useState('');
+  const [categoryColor, setCategoryColor] = useState(CATEGORY_COLORS[0]);
 
   // ---- Data fetching ----
 
+  const backendUrl = process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, '');
+
   const fetchChats = useCallback(async () => {
-    const backendUrl = process.env.NEXT_PUBLIC_API_URL;
     if (!backendUrl || !token) return;
     try {
-      const response = await fetch(`${backendUrl.replace(/\/$/, '')}/messages/chats`, {
+      const response = await fetch(`${backendUrl}/messages/chats`, {
         method: 'GET',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         cache: 'no-store',
@@ -332,24 +358,44 @@ export default function MessagesPage() {
     } catch (error) {
       console.error('Error fetching chats:', error);
     }
-  }, [token]);
+  }, [token, backendUrl]);
+
+  const fetchCategories = useCallback(async () => {
+    if (!backendUrl || !token) return;
+    try {
+      const response = await fetch(`${backendUrl}/categories`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const json = await response.json().catch(() => null);
+      if (response.ok && Array.isArray(json)) setCategories(json);
+    } catch (error) {
+      console.error('Error fetching categories:', error);
+    }
+  }, [token, backendUrl]);
+
+  const fetchAssignments = useCallback(async () => {
+    if (!backendUrl || !token) return;
+    try {
+      const response = await fetch(`${backendUrl}/categories/assignments`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const json = await response.json().catch(() => null);
+      if (response.ok && Array.isArray(json)) setAssignments(json);
+    } catch (error) {
+      console.error('Error fetching assignments:', error);
+    }
+  }, [token, backendUrl]);
 
   const fetchMessages = useCallback(async (instanceName: string, remoteJid: string, allJids?: string[]) => {
-    const backendUrl = process.env.NEXT_PUBLIC_API_URL;
     if (!backendUrl || !token) return;
-
-    // Cancel any in-flight request for a previous chat
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
     }
     const controller = new AbortController();
     abortControllerRef.current = controller;
-
     setLoadingMessages(true);
     try {
-      let url = `${backendUrl.replace(/\/$/, '')}/messages/${encodeURIComponent(instanceName)}/${encodeURIComponent(remoteJid)}`;
-      // Pass all known JID variants (including @lid) so the backend can
-      // query sent messages stored under alternate JID formats.
+      let url = `${backendUrl}/messages/${encodeURIComponent(instanceName)}/${encodeURIComponent(remoteJid)}`;
       if (allJids && allJids.length > 0) {
         const encoded = allJids.map((j) => encodeURIComponent(j)).join(',');
         url += `?allJids=${encoded}`;
@@ -360,18 +406,10 @@ export default function MessagesPage() {
         cache: 'no-store',
         signal: controller.signal,
       });
-
-      // If this request was aborted (user clicked another chat), bail out
-      // silently – the newer request will handle state updates.
       if (controller.signal.aborted) return;
-
       const json = await response.json().catch(() => null);
-
-      // Double-check after async .json() parse
       if (controller.signal.aborted) return;
-
       if (response.ok && json?.messages) {
-        // Sort ascending by messageTimestamp (oldest first)
         const sorted = [...json.messages].sort((a: any, b: any) => {
           const tA = normalizeTimestamp(a.messageTimestamp || a.MessageTimestamp);
           const tB = normalizeTimestamp(b.messageTimestamp || b.MessageTimestamp);
@@ -383,62 +421,45 @@ export default function MessagesPage() {
         setMessages([]);
       }
     } catch (error: any) {
-      // Aborted fetches throw DOMException with name 'AbortError' – ignore them
       if (error?.name === 'AbortError') return;
       console.error('Error fetching messages:', error);
       setMessages([]);
     } finally {
-      // Only clear loading if this is still the active request
       if (!controller.signal.aborted) {
         setLoadingMessages(false);
       }
     }
-  }, [token]);
+  }, [token, backendUrl]);
 
   async function loadChats() {
     setLoading(true);
-    await fetchChats();
+    await Promise.all([fetchChats(), fetchCategories(), fetchAssignments()]);
     setLoading(false);
   }
 
   async function refreshChats() {
     setRefreshing(true);
-    await fetchChats();
+    await Promise.all([fetchChats(), fetchCategories(), fetchAssignments()]);
     setRefreshing(false);
   }
 
   const sendMessage = useCallback(async () => {
-    const backendUrl = process.env.NEXT_PUBLIC_API_URL;
     if (!backendUrl || !token || !selectedChat || !messageInput.trim()) return;
-
     const jid = selectedChat.remoteJid || selectedChat.id || '';
     if (!jid) return;
-
-    // Extract the phone number from the JID (part before @)
     const number = jid.split('@')[0] || '';
     if (!number) return;
-
     setSending(true);
     try {
-      const url = `${backendUrl.replace(/\/$/, '')}/messages/${encodeURIComponent(selectedChat.instanceName)}/send-text`;
+      const url = `${backendUrl}/messages/${encodeURIComponent(selectedChat.instanceName)}/send-text`;
       const response = await fetch(url, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          number,
-          text: messageInput.trim(),
-        }),
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ number, text: messageInput.trim() }),
       });
-
       const json = await response.json().catch(() => null);
-
       if (response.ok && json) {
-        // Clear the input
         setMessageInput('');
-        // Append the sent message to the local list so it appears immediately
         setMessages((prev) => [
           ...prev,
           {
@@ -456,14 +477,120 @@ export default function MessagesPage() {
     } finally {
       setSending(false);
     }
-  }, [token, selectedChat, messageInput]);
+  }, [token, backendUrl, selectedChat, messageInput]);
+
+  // ---- Category CRUD ----
+
+  async function createCategory() {
+    if (!backendUrl || !token || !categoryName.trim()) return;
+    try {
+      const response = await fetch(`${backendUrl}/categories`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ name: categoryName.trim(), color: categoryColor }),
+      });
+      if (response.ok) {
+        const created = await response.json();
+        setCategories((prev) => [...prev, created]);
+        setCategoryDialogOpen(false);
+        setCategoryName('');
+        setCategoryColor(CATEGORY_COLORS[0]);
+      }
+    } catch (error) {
+      console.error('Error creating category:', error);
+    }
+  }
+
+  async function updateCategory() {
+    if (!backendUrl || !token || !editingCategory || !categoryName.trim()) return;
+    try {
+      const response = await fetch(`${backendUrl}/categories/${editingCategory.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ name: categoryName.trim(), color: categoryColor }),
+      });
+      if (response.ok) {
+        const updated = await response.json();
+        setCategories((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
+        setCategoryDialogOpen(false);
+        setEditingCategory(null);
+        setCategoryName('');
+        setCategoryColor(CATEGORY_COLORS[0]);
+      }
+    } catch (error) {
+      console.error('Error updating category:', error);
+    }
+  }
+
+  async function deleteCategory(id: string) {
+    if (!backendUrl || !token) return;
+    try {
+      const response = await fetch(`${backendUrl}/categories/${id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (response.ok || response.status === 204) {
+        setCategories((prev) => prev.filter((c) => c.id !== id));
+        setAssignments((prev) => prev.filter((a) => a.categoryId !== id));
+      }
+    } catch (error) {
+      console.error('Error deleting category:', error);
+    }
+  }
+
+  async function assignChatToCategory(chat: Chat, categoryId: string) {
+    if (!backendUrl || !token) return;
+    const remoteJid = chat.remoteJid || chat.id || '';
+    try {
+      const response = await fetch(`${backendUrl}/categories/${categoryId}/assign`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ remoteJid, instanceName: chat.instanceName }),
+      });
+      if (response.ok) {
+        const created = await response.json();
+        // Remove any old assignment for this chat, then add new one
+        setAssignments((prev) => [
+          ...prev.filter((a) => !(a.remoteJid === remoteJid && a.instanceName === chat.instanceName)),
+          created,
+        ]);
+      }
+    } catch (error) {
+      console.error('Error assigning chat:', error);
+    }
+  }
+
+  async function unassignChat(chat: Chat) {
+    if (!backendUrl || !token) return;
+    const remoteJid = chat.remoteJid || chat.id || '';
+    // Find the assignment to get the category ID
+    const assignment = assignments.find(
+      (a) => a.remoteJid === remoteJid && a.instanceName === chat.instanceName,
+    );
+    if (!assignment) return;
+    try {
+      const response = await fetch(`${backendUrl}/categories/${assignment.categoryId}/assign`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ remoteJid, instanceName: chat.instanceName }),
+      });
+      if (response.ok || response.status === 204) {
+        setAssignments((prev) =>
+          prev.filter((a) => !(a.remoteJid === remoteJid && a.instanceName === chat.instanceName)),
+        );
+      }
+    } catch (error) {
+      console.error('Error unassigning chat:', error);
+    }
+  }
+
+  // ---- Effects ----
 
   useEffect(() => {
     if (token) loadChats();
     else setLoading(false);
   }, [token]);
 
-  // When selected chat changes, fetch its messages
   useEffect(() => {
     if (selectedChat) {
       const jid = selectedChat.remoteJid || selectedChat.id || '';
@@ -473,41 +600,81 @@ export default function MessagesPage() {
     }
   }, [selectedChat, fetchMessages]);
 
-  // Auto-scroll to bottom when messages load
   useEffect(() => {
     if (messagesEndRef.current) {
       messagesEndRef.current.scrollIntoView({ behavior: 'auto' });
     }
   }, [messages]);
 
+  // Auto-expand all instances on first load
+  useEffect(() => {
+    if (data?.instances) {
+      const connected = data.instances.filter((i) => i.connected).map((i) => i.name);
+      setExpandedInstances(new Set(connected));
+    }
+  }, [data?.instances]);
+
   // ---- Derived data ----
 
   const instances = data?.instances || [];
 
-  /** Group chats by instance (only connected instances with chats) */
-  const chatsByInstance = useMemo(() => {
-    if (!data?.chats) return new Map<string, Chat[]>();
-    const map = new Map<string, Chat[]>();
-    // Initialise columns for every connected instance so they appear even if empty
-    for (const inst of data.instances || []) {
-      if (inst.connected) map.set(inst.name, []);
+  /** Build assignment lookup: "instanceName::remoteJid" → categoryId */
+  const assignmentMap = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const a of assignments) {
+      map.set(`${a.instanceName}::${a.remoteJid}`, a.categoryId);
     }
-    for (const chat of data.chats) {
-      if (isGroupChat(chat)) continue;
-      if (isStatusBroadcast(chat)) continue;
+    return map;
+  }, [assignments]);
+
+  /** All chats filtered by search, excluding groups/broadcasts */
+  const filteredChats = useMemo(() => {
+    if (!data?.chats) return [];
+    return data.chats.filter((chat) => {
+      if (isGroupChat(chat)) return false;
+      if (isStatusBroadcast(chat)) return false;
       if (search.trim()) {
         const query = search.toLowerCase();
         const name = getChatDisplayName(chat).toLowerCase();
         const jid = (chat.remoteJid || chat.id || '').toLowerCase();
         const preview = getLastMessagePreview(chat).text.toLowerCase();
-        if (!name.includes(query) && !jid.includes(query) && !preview.includes(query)) continue;
+        if (!name.includes(query) && !jid.includes(query) && !preview.includes(query)) return false;
       }
+      return true;
+    });
+  }, [data?.chats, search]);
+
+  /** Chats grouped by instance that are NOT assigned to any category */
+  const unsortedChatsByInstance = useMemo(() => {
+    const map = new Map<string, Chat[]>();
+    for (const inst of instances) {
+      if (inst.connected) map.set(inst.name, []);
+    }
+    for (const chat of filteredChats) {
+      const key = getChatKey(chat);
+      if (assignmentMap.has(key)) continue; // assigned to a category
       const arr = map.get(chat.instanceName) || [];
       arr.push(chat);
       map.set(chat.instanceName, arr);
     }
     return map;
-  }, [data?.chats, data?.instances, search]);
+  }, [filteredChats, instances, assignmentMap]);
+
+  /** Chats grouped by category */
+  const chatsByCategory = useMemo(() => {
+    const map = new Map<string, Chat[]>();
+    for (const cat of categories) {
+      map.set(cat.id, []);
+    }
+    for (const chat of filteredChats) {
+      const key = getChatKey(chat);
+      const catId = assignmentMap.get(key);
+      if (catId && map.has(catId)) {
+        map.get(catId)!.push(chat);
+      }
+    }
+    return map;
+  }, [filteredChats, categories, assignmentMap]);
 
   // ---- Handlers ----
 
@@ -520,6 +687,29 @@ export default function MessagesPage() {
     setSelectedChat(null);
     setMessages([]);
     setMessageInput('');
+  }
+
+  function toggleInstance(name: string) {
+    setExpandedInstances((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+  }
+
+  function openCreateCategoryDialog() {
+    setEditingCategory(null);
+    setCategoryName('');
+    setCategoryColor(CATEGORY_COLORS[0]);
+    setCategoryDialogOpen(true);
+  }
+
+  function openEditCategoryDialog(cat: Category) {
+    setEditingCategory(cat);
+    setCategoryName(cat.name);
+    setCategoryColor(cat.color || CATEGORY_COLORS[0]);
+    setCategoryDialogOpen(true);
   }
 
   // ---- Loading state ----
@@ -541,7 +731,6 @@ export default function MessagesPage() {
 
   const hasConnectedInstances = instances.some((i) => i.connected);
 
-  // If no data or no connected instances, show empty states full-width
   if (!data || (!hasConnectedInstances && data)) {
     return (
       <div className="min-h-[calc(100vh-4rem)] bg-gradient-to-b from-background to-secondary/20">
@@ -571,13 +760,125 @@ export default function MessagesPage() {
     );
   }
 
-  // ---- Chat key for identifying the selected item ----
   const selectedChatKey = selectedChat
     ? `${selectedChat.instanceName}-${selectedChat.remoteJid || selectedChat.id}`
     : null;
 
+  // ---- Chat card component (reused in both instance list and category columns) ----
+
+  function renderChatCard(chat: Chat, index: number) {
+    const displayName = getChatDisplayName(chat);
+    const initials = getInitials(displayName);
+    const timestamp = formatTimestamp(getChatTimestamp(chat));
+    const { text: preview, icon: previewIcon } = getLastMessagePreview(chat);
+    const unread = chat.unreadCount || 0;
+    const chatKey = `${chat.instanceName}-${chat.remoteJid || chat.id || index}`;
+    const isSelected = chatKey === selectedChatKey;
+    const chatAssignmentKey = getChatKey(chat);
+    const assignedCategoryId = assignmentMap.get(chatAssignmentKey);
+
+    return (
+      <DropdownMenu key={chatKey}>
+        <div className="relative group">
+          <button
+            onClick={() => handleSelectChat(chat)}
+            className={cn(
+              'w-full rounded-lg border p-2.5 text-left transition-all duration-150',
+              isSelected
+                ? 'bg-primary/10 border-primary/40 shadow-sm ring-1 ring-primary/20'
+                : 'bg-card border-border/50 hover:border-border hover:shadow-sm',
+              unread > 0 && !isSelected && 'border-primary/20 bg-primary/[0.03]'
+            )}
+          >
+            <div className="flex items-start gap-2.5">
+              {/* Avatar */}
+              <div className="relative flex-shrink-0">
+                <div className="w-9 h-9 rounded-full flex items-center justify-center text-[10px] font-semibold bg-primary/10 text-primary">
+                  {initials}
+                </div>
+                {unread > 0 && (
+                  <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-primary text-primary-foreground text-[8px] font-bold flex items-center justify-center shadow-sm">
+                    {unread > 99 ? '99+' : unread}
+                  </span>
+                )}
+              </div>
+
+              {/* Info */}
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center justify-between gap-1 mb-0.5">
+                  <span className={cn('text-xs truncate', unread > 0 ? 'font-semibold text-foreground' : 'font-medium text-foreground')}>
+                    {displayName}
+                  </span>
+                  {timestamp && (
+                    <span className={cn('text-[10px] flex-shrink-0', unread > 0 ? 'text-primary font-semibold' : 'text-muted-foreground')}>
+                      {timestamp}
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center gap-1">
+                  {previewIcon && <span className="text-muted-foreground">{previewIcon}</span>}
+                  {preview && (
+                    <p className={cn('text-[11px] truncate leading-snug flex-1', unread > 0 ? 'text-foreground/80' : 'text-muted-foreground')}>
+                      {preview}
+                    </p>
+                  )}
+                  {/* Instance badge in category view */}
+                  <span className={cn('inline-flex items-center rounded px-1 py-0.5 text-[8px] font-medium flex-shrink-0 ml-auto', getInstanceColor(chat.instanceName))}>
+                    {chat.instanceName}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </button>
+
+          {/* Context menu trigger */}
+          <DropdownMenuTrigger asChild>
+            <button className="absolute top-1.5 right-1.5 opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded-md hover:bg-secondary/80">
+              <MoreHorizontal className="h-3.5 w-3.5 text-muted-foreground" />
+            </button>
+          </DropdownMenuTrigger>
+        </div>
+
+        <DropdownMenuContent align="end" className="w-48">
+          {categories.length > 0 && (
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger>
+                <Tag className="h-3.5 w-3.5 mr-2" />
+                Mover para categoria
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent>
+                {categories.map((cat) => (
+                  <DropdownMenuItem
+                    key={cat.id}
+                    onClick={() => assignChatToCategory(chat, cat.id)}
+                    className={cn(assignedCategoryId === cat.id && 'bg-primary/10')}
+                  >
+                    <span
+                      className="w-2.5 h-2.5 rounded-full mr-2 flex-shrink-0"
+                      style={{ backgroundColor: cat.color || '#6366f1' }}
+                    />
+                    {cat.name}
+                    {assignedCategoryId === cat.id && (
+                      <Check className="h-3.5 w-3.5 ml-auto text-primary" />
+                    )}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+          )}
+          {assignedCategoryId && (
+            <DropdownMenuItem onClick={() => unassignChat(chat)}>
+              <X className="h-3.5 w-3.5 mr-2" />
+              Remover da categoria
+            </DropdownMenuItem>
+          )}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    );
+  }
+
   // =======================================================================
-  // RENDER: Kanban Board + Chat Panel layout
+  // RENDER
   // =======================================================================
 
   return (
@@ -585,7 +886,7 @@ export default function MessagesPage() {
       <div className="flex h-full">
 
         {/* ================================================================ */}
-        {/* LEFT PANEL – Kanban Board                                        */}
+        {/* LEFT PANEL – Instances (vertical) + Category Columns             */}
         {/* ================================================================ */}
         <div
           className={cn(
@@ -594,7 +895,7 @@ export default function MessagesPage() {
             'w-full lg:w-1/2 lg:min-w-0',
           )}
         >
-          {/* Top bar: title + search + refresh */}
+          {/* Top bar: title + search + refresh + add category */}
           <div className="flex-shrink-0 border-b border-border/50">
             <div className="px-4 pt-4 pb-3 flex items-center justify-between gap-3">
               <div className="flex items-center gap-3 flex-shrink-0">
@@ -632,115 +933,169 @@ export default function MessagesPage() {
             </div>
           </div>
 
-          {/* Kanban columns */}
-          <div className="flex-1 overflow-x-auto overflow-y-hidden">
-            <div className="flex gap-3 p-3 h-full min-w-max">
-              {Array.from(chatsByInstance.entries()).map(([instanceName, chats]) => {
-                const inst = instances.find((i) => i.name === instanceName);
+          {/* Scrollable content: instances + categories */}
+          <div className="flex-1 overflow-hidden flex flex-col">
+
+            {/* ---- Instance rows (stacked vertically) ---- */}
+            <div className="flex-shrink-0 max-h-[45%] overflow-y-auto border-b border-border/40">
+              <div className="px-3 pt-3 pb-1">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
+                    Instâncias — Conversas não categorizadas
+                  </span>
+                </div>
+              </div>
+
+              {Array.from(unsortedChatsByInstance.entries()).map(([instanceName, chats]) => {
+                const isExpanded = expandedInstances.has(instanceName);
                 const dotColor = getInstanceDotColor(instanceName);
 
                 return (
-                  <div
-                    key={instanceName}
-                    className="w-[280px] flex-shrink-0 flex flex-col rounded-xl bg-secondary/30 border border-border/50"
-                  >
-                    {/* Column header */}
-                    <div className="flex items-center justify-between px-3 py-2.5 border-b border-border/40">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <span className={cn('w-2.5 h-2.5 rounded-full flex-shrink-0', dotColor)} />
-                        <span className="text-sm font-semibold text-foreground truncate">{instanceName}</span>
-                      </div>
-                      <span className="inline-flex items-center justify-center rounded-full bg-primary/10 text-primary text-[11px] font-bold px-2 py-0.5 flex-shrink-0">
+                  <div key={instanceName} className="mx-3 mb-2">
+                    {/* Instance header row */}
+                    <button
+                      onClick={() => toggleInstance(instanceName)}
+                      className="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-secondary/30 border border-border/40 hover:bg-secondary/50 transition-colors"
+                    >
+                      {isExpanded ? (
+                        <ChevronDown className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
+                      ) : (
+                        <ChevronRight className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
+                      )}
+                      <span className={cn('w-2.5 h-2.5 rounded-full flex-shrink-0', dotColor)} />
+                      <span className="text-sm font-semibold text-foreground truncate">{instanceName}</span>
+                      <span className="inline-flex items-center justify-center rounded-full bg-primary/10 text-primary text-[11px] font-bold px-2 py-0.5 flex-shrink-0 ml-auto">
                         {chats.length}
                       </span>
-                    </div>
+                    </button>
 
-                    {/* Column body — scrollable chat cards */}
-                    <ScrollArea className="flex-1">
-                      <div className="p-2 space-y-2">
+                    {/* Expanded chat list */}
+                    {isExpanded && (
+                      <div className="mt-1.5 space-y-1.5 pl-2">
                         {chats.length > 0 ? (
-                          chats.map((chat, index) => {
-                            const displayName = getChatDisplayName(chat);
-                            const initials = getInitials(displayName);
-                            const timestamp = formatTimestamp(getChatTimestamp(chat));
-                            const { text: preview, icon: previewIcon } = getLastMessagePreview(chat);
-                            const unread = chat.unreadCount || 0;
-                            const chatKey = `${chat.instanceName}-${chat.remoteJid || chat.id || index}`;
-                            const isSelected = chatKey === selectedChatKey;
-
-                            return (
-                              <button
-                                key={chatKey}
-                                onClick={() => handleSelectChat(chat)}
-                                className={cn(
-                                  'w-full rounded-lg border p-2.5 text-left transition-all duration-150',
-                                  isSelected
-                                    ? 'bg-primary/10 border-primary/40 shadow-sm ring-1 ring-primary/20'
-                                    : 'bg-card border-border/50 hover:border-border hover:shadow-sm',
-                                  unread > 0 && !isSelected && 'border-primary/20 bg-primary/[0.03]'
-                                )}
-                              >
-                                <div className="flex items-start gap-2.5">
-                                  {/* Avatar */}
-                                  <div className="relative flex-shrink-0">
-                                    <div className="w-9 h-9 rounded-full flex items-center justify-center text-[10px] font-semibold bg-primary/10 text-primary">
-                                      {initials}
-                                    </div>
-                                    {unread > 0 && (
-                                      <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-primary text-primary-foreground text-[8px] font-bold flex items-center justify-center shadow-sm">
-                                        {unread > 99 ? '99+' : unread}
-                                      </span>
-                                    )}
-                                  </div>
-
-                                  {/* Info */}
-                                  <div className="flex-1 min-w-0">
-                                    <div className="flex items-center justify-between gap-1 mb-0.5">
-                                      <span className={cn('text-xs truncate', unread > 0 ? 'font-semibold text-foreground' : 'font-medium text-foreground')}>
-                                        {displayName}
-                                      </span>
-                                      {timestamp && (
-                                        <span className={cn('text-[10px] flex-shrink-0', unread > 0 ? 'text-primary font-semibold' : 'text-muted-foreground')}>
-                                          {timestamp}
-                                        </span>
-                                      )}
-                                    </div>
-                                    {preview && (
-                                      <div className="flex items-center gap-1">
-                                        {previewIcon && <span className="text-muted-foreground">{previewIcon}</span>}
-                                        <p className={cn('text-[11px] truncate leading-snug', unread > 0 ? 'text-foreground/80' : 'text-muted-foreground')}>
-                                          {preview}
-                                        </p>
-                                      </div>
-                                    )}
-                                  </div>
-                                </div>
-                              </button>
-                            );
-                          })
+                          chats.map((chat, index) => renderChatCard(chat, index))
                         ) : (
-                          <div className="flex flex-col items-center justify-center py-8 px-2 text-center">
-                            <MessageCircle className="h-6 w-6 text-muted-foreground/30 mb-2" />
+                          <div className="flex items-center justify-center py-4 px-2 text-center">
                             <p className="text-[11px] text-muted-foreground">
-                              {search.trim() ? 'Nenhum resultado' : 'Sem conversas'}
+                              {search.trim() ? 'Nenhum resultado' : 'Todas as conversas estão categorizadas'}
                             </p>
                           </div>
                         )}
                       </div>
-                    </ScrollArea>
+                    )}
                   </div>
                 );
               })}
 
-              {/* Show a hint when there are no columns at all */}
-              {chatsByInstance.size === 0 && (
-                <div className="flex items-center justify-center w-full">
-                  <div className="text-center px-6">
-                    <MessageCircle className="h-8 w-8 text-muted-foreground/30 mx-auto mb-3" />
-                    <p className="text-sm text-muted-foreground">Nenhuma instância conectada</p>
-                  </div>
+              {unsortedChatsByInstance.size === 0 && (
+                <div className="flex items-center justify-center py-4">
+                  <p className="text-sm text-muted-foreground">Nenhuma instância conectada</p>
                 </div>
               )}
+            </div>
+
+            {/* ---- Category columns (horizontal scroll) ---- */}
+            <div className="flex-1 overflow-hidden flex flex-col">
+              <div className="px-3 pt-3 pb-1 flex items-center justify-between flex-shrink-0">
+                <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
+                  Categorias
+                </span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={openCreateCategoryDialog}
+                  className="h-7 px-2 text-xs gap-1"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  Nova
+                </Button>
+              </div>
+
+              <div className="flex-1 overflow-x-auto overflow-y-hidden">
+                <div className="flex gap-3 p-3 h-full min-w-max">
+                  {categories.map((cat) => {
+                    const chats = chatsByCategory.get(cat.id) || [];
+
+                    return (
+                      <div
+                        key={cat.id}
+                        className="w-[280px] flex-shrink-0 flex flex-col rounded-xl bg-secondary/30 border border-border/50"
+                      >
+                        {/* Category column header */}
+                        <div className="flex items-center justify-between px-3 py-2.5 border-b border-border/40">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span
+                              className="w-2.5 h-2.5 rounded-full flex-shrink-0"
+                              style={{ backgroundColor: cat.color || '#6366f1' }}
+                            />
+                            <span className="text-sm font-semibold text-foreground truncate">{cat.name}</span>
+                          </div>
+                          <div className="flex items-center gap-1 flex-shrink-0">
+                            <span className="inline-flex items-center justify-center rounded-full bg-primary/10 text-primary text-[11px] font-bold px-2 py-0.5">
+                              {chats.length}
+                            </span>
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <button className="p-1 rounded-md hover:bg-secondary/80 transition-colors">
+                                  <MoreHorizontal className="h-3.5 w-3.5 text-muted-foreground" />
+                                </button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="end" className="w-40">
+                                <DropdownMenuItem onClick={() => openEditCategoryDialog(cat)}>
+                                  <Pencil className="h-3.5 w-3.5 mr-2" />
+                                  Editar
+                                </DropdownMenuItem>
+                                <DropdownMenuSeparator />
+                                <DropdownMenuItem
+                                  onClick={() => deleteCategory(cat.id)}
+                                  className="text-destructive focus:text-destructive"
+                                >
+                                  <Trash2 className="h-3.5 w-3.5 mr-2" />
+                                  Excluir
+                                </DropdownMenuItem>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
+                          </div>
+                        </div>
+
+                        {/* Category body — scrollable chat cards */}
+                        <ScrollArea className="flex-1">
+                          <div className="p-2 space-y-2">
+                            {chats.length > 0 ? (
+                              chats.map((chat, index) => renderChatCard(chat, index))
+                            ) : (
+                              <div className="flex flex-col items-center justify-center py-8 px-2 text-center">
+                                <FolderOpen className="h-6 w-6 text-muted-foreground/30 mb-2" />
+                                <p className="text-[11px] text-muted-foreground">
+                                  {search.trim() ? 'Nenhum resultado' : 'Sem conversas'}
+                                </p>
+                              </div>
+                            )}
+                          </div>
+                        </ScrollArea>
+                      </div>
+                    );
+                  })}
+
+                  {categories.length === 0 && (
+                    <div className="flex items-center justify-center w-full">
+                      <div className="text-center px-6">
+                        <FolderOpen className="h-8 w-8 text-muted-foreground/30 mx-auto mb-3" />
+                        <p className="text-sm text-muted-foreground mb-2">Nenhuma categoria criada</p>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={openCreateCategoryDialog}
+                          className="gap-1"
+                        >
+                          <Plus className="h-3.5 w-3.5" />
+                          Criar categoria
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -760,7 +1115,6 @@ export default function MessagesPage() {
               {/* ---- Contact header ---- */}
               <div className="flex-shrink-0 h-16 border-b border-border/60 bg-card/50 backdrop-blur-sm flex items-center justify-between px-4 sm:px-6">
                 <div className="flex items-center gap-3 min-w-0">
-                  {/* Back button (mobile only) */}
                   <button
                     onClick={handleCloseChat}
                     className="lg:hidden flex-shrink-0 p-1.5 -ml-1.5 rounded-lg hover:bg-secondary/80 transition-colors"
@@ -768,7 +1122,6 @@ export default function MessagesPage() {
                     <ArrowLeft className="h-5 w-5 text-foreground" />
                   </button>
 
-                  {/* Avatar */}
                   <div
                     className="w-10 h-10 rounded-full flex items-center justify-center text-xs font-semibold flex-shrink-0 bg-primary/10 text-primary"
                   >
@@ -786,7 +1139,6 @@ export default function MessagesPage() {
                   </div>
                 </div>
 
-                {/* Close button (desktop) */}
                 <button
                   onClick={handleCloseChat}
                   className="hidden lg:flex flex-shrink-0 p-1.5 rounded-lg hover:bg-secondary/80 transition-colors"
@@ -811,8 +1163,6 @@ export default function MessagesPage() {
                       const fromMe = key.fromMe === true;
                       const { text, icon } = getMessageText(msg);
                       const bubbleTime = formatBubbleTime(msg.messageTimestamp || msg.MessageTimestamp);
-
-                      // Skip empty / protocol messages
                       if (!text) return null;
 
                       return (
@@ -885,7 +1235,6 @@ export default function MessagesPage() {
               </div>
             </>
           ) : (
-            /* ---- Empty state: no chat selected ---- */
             <div className="flex-1 flex items-center justify-center bg-secondary/10">
               <div className="text-center px-6 animate-fade-in">
                 <div className="w-20 h-20 rounded-2xl gradient-primary flex items-center justify-center shadow-glow mx-auto mb-6">
@@ -902,6 +1251,64 @@ export default function MessagesPage() {
           )}
         </div>
       </div>
+
+      {/* ================================================================ */}
+      {/* Category create/edit dialog                                       */}
+      {/* ================================================================ */}
+      <Dialog open={categoryDialogOpen} onOpenChange={setCategoryDialogOpen}>
+        <DialogContent className="sm:max-w-[400px]">
+          <DialogHeader>
+            <DialogTitle>
+              {editingCategory ? 'Editar categoria' : 'Nova categoria'}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div>
+              <label className="text-sm font-medium text-foreground mb-1.5 block">Nome</label>
+              <Input
+                value={categoryName}
+                onChange={(e) => setCategoryName(e.target.value)}
+                placeholder="Ex: Clientes VIP"
+                className="h-9"
+                autoFocus
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    editingCategory ? updateCategory() : createCategory();
+                  }
+                }}
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium text-foreground mb-1.5 block">Cor</label>
+              <div className="flex flex-wrap gap-2">
+                {CATEGORY_COLORS.map((color) => (
+                  <button
+                    key={color}
+                    onClick={() => setCategoryColor(color)}
+                    className={cn(
+                      'w-8 h-8 rounded-full transition-all',
+                      categoryColor === color && 'ring-2 ring-offset-2 ring-offset-background ring-primary scale-110',
+                    )}
+                    style={{ backgroundColor: color }}
+                  />
+                ))}
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCategoryDialogOpen(false)}>
+              Cancelar
+            </Button>
+            <Button
+              onClick={editingCategory ? updateCategory : createCategory}
+              disabled={!categoryName.trim()}
+            >
+              {editingCategory ? 'Salvar' : 'Criar'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
