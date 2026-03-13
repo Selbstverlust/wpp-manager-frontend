@@ -45,6 +45,16 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
+  ContextMenuTrigger,
+} from '@/components/ui/context-menu';
+import {
   Dialog,
   DialogContent,
   DialogHeader,
@@ -778,77 +788,72 @@ export default function MessagesPage() {
     const assignedCategoryId = assignmentMap.get(chatAssignmentKey);
 
     return (
-      <DropdownMenu key={chatKey}>
-        <div className="relative group">
-          <button
-            onClick={() => handleSelectChat(chat)}
-            className={cn(
-              'w-full rounded-lg border p-2.5 text-left transition-all duration-150',
-              isSelected
-                ? 'bg-primary/10 border-primary/40 shadow-sm ring-1 ring-primary/20'
-                : 'bg-card border-border/50 hover:border-border hover:shadow-sm',
-              unread > 0 && !isSelected && 'border-primary/20 bg-primary/[0.03]'
-            )}
-          >
-            <div className="flex items-start gap-2.5">
-              {/* Avatar */}
-              <div className="relative flex-shrink-0">
-                <div className="w-9 h-9 rounded-full flex items-center justify-center text-[10px] font-semibold bg-primary/10 text-primary">
-                  {initials}
-                </div>
-                {unread > 0 && (
-                  <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-primary text-primary-foreground text-[8px] font-bold flex items-center justify-center shadow-sm">
-                    {unread > 99 ? '99+' : unread}
-                  </span>
-                )}
-              </div>
-
-              {/* Info */}
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center justify-between gap-1 mb-0.5">
-                  <span className={cn('text-xs truncate', unread > 0 ? 'font-semibold text-foreground' : 'font-medium text-foreground')}>
-                    {displayName}
-                  </span>
-                  {timestamp && (
-                    <span className={cn('text-[10px] flex-shrink-0', unread > 0 ? 'text-primary font-semibold' : 'text-muted-foreground')}>
-                      {timestamp}
+      <ContextMenu key={chatKey}>
+        <ContextMenuTrigger asChild>
+          <div className="relative group block w-full">
+            <button
+              onClick={() => handleSelectChat(chat)}
+              className={cn(
+                'w-full rounded-lg border p-2.5 text-left transition-all duration-150',
+                isSelected
+                  ? 'bg-primary/10 border-primary/40 shadow-sm ring-1 ring-primary/20'
+                  : 'bg-card border-border/50 hover:border-border hover:shadow-sm',
+                unread > 0 && !isSelected && 'border-primary/20 bg-primary/[0.03]'
+              )}
+            >
+              <div className="flex items-start gap-2.5">
+                {/* Avatar */}
+                <div className="relative flex-shrink-0">
+                  <div className="w-9 h-9 rounded-full flex items-center justify-center text-[10px] font-semibold bg-primary/10 text-primary">
+                    {initials}
+                  </div>
+                  {unread > 0 && (
+                    <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-primary text-primary-foreground text-[8px] font-bold flex items-center justify-center shadow-sm">
+                      {unread > 99 ? '99+' : unread}
                     </span>
                   )}
                 </div>
-                <div className="flex items-center gap-1">
-                  {previewIcon && <span className="text-muted-foreground">{previewIcon}</span>}
-                  {preview && (
-                    <p className={cn('text-[11px] truncate leading-snug flex-1', unread > 0 ? 'text-foreground/80' : 'text-muted-foreground')}>
-                      {preview}
-                    </p>
-                  )}
-                  {/* Instance badge in category view */}
-                  <span className={cn('inline-flex items-center rounded px-1 py-0.5 text-[8px] font-medium flex-shrink-0 ml-auto', getInstanceColor(chat.instanceName))}>
-                    {chat.instanceName}
-                  </span>
+
+                {/* Info */}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center justify-between gap-1 mb-0.5">
+                    <span className={cn('text-xs truncate', unread > 0 ? 'font-semibold text-foreground' : 'font-medium text-foreground')}>
+                      {displayName}
+                    </span>
+                    {timestamp && (
+                      <span className={cn('text-[10px] flex-shrink-0', unread > 0 ? 'text-primary font-semibold' : 'text-muted-foreground')}>
+                        {timestamp}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-1">
+                    {previewIcon && <span className="text-muted-foreground">{previewIcon}</span>}
+                    {preview && (
+                      <p className={cn('text-[11px] truncate leading-snug flex-1', unread > 0 ? 'text-foreground/80' : 'text-muted-foreground')}>
+                        {preview}
+                      </p>
+                    )}
+                    {/* Instance badge in category view */}
+                    <span className={cn('inline-flex items-center rounded px-1 py-0.5 text-[8px] font-medium flex-shrink-0 ml-auto', getInstanceColor(chat.instanceName))}>
+                      {chat.instanceName}
+                    </span>
+                  </div>
                 </div>
               </div>
-            </div>
-          </button>
-
-          {/* Context menu trigger */}
-          <DropdownMenuTrigger asChild>
-            <button className="absolute top-1.5 right-1.5 opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded-md hover:bg-secondary/80">
-              <MoreHorizontal className="h-3.5 w-3.5 text-muted-foreground" />
             </button>
-          </DropdownMenuTrigger>
-        </div>
+          </div>
+        </ContextMenuTrigger>
 
-        <DropdownMenuContent align="end" className="w-48">
+        <ContextMenuContent className="w-48">
           {categories.length > 0 && (
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger>
+            <ContextMenuSub>
+              <ContextMenuSubTrigger>
                 <Tag className="h-3.5 w-3.5 mr-2" />
                 Mover para categoria
-              </DropdownMenuSubTrigger>
-              <DropdownMenuSubContent>
+              </ContextMenuSubTrigger>
+              <ContextMenuSubContent className="w-48">
                 {categories.map((cat) => (
-                  <DropdownMenuItem
+                  <ContextMenuItem
                     key={cat.id}
                     onClick={() => assignChatToCategory(chat, cat.id)}
                     className={cn(assignedCategoryId === cat.id && 'bg-primary/10')}
@@ -861,19 +866,19 @@ export default function MessagesPage() {
                     {assignedCategoryId === cat.id && (
                       <Check className="h-3.5 w-3.5 ml-auto text-primary" />
                     )}
-                  </DropdownMenuItem>
+                  </ContextMenuItem>
                 ))}
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
+              </ContextMenuSubContent>
+            </ContextMenuSub>
           )}
           {assignedCategoryId && (
-            <DropdownMenuItem onClick={() => unassignChat(chat)}>
+            <ContextMenuItem onClick={() => unassignChat(chat)}>
               <X className="h-3.5 w-3.5 mr-2" />
               Remover da categoria
-            </DropdownMenuItem>
+            </ContextMenuItem>
           )}
-        </DropdownMenuContent>
-      </DropdownMenu>
+        </ContextMenuContent>
+      </ContextMenu>
     );
   }
 
@@ -934,14 +939,14 @@ export default function MessagesPage() {
           </div>
 
           {/* Scrollable content: instances + categories */}
-          <div className="flex-1 overflow-hidden flex flex-col">
+          <div className="flex-1 overflow-hidden flex flex-row">
 
-            {/* ---- Instance rows (stacked vertically) ---- */}
-            <div className="flex-shrink-0 max-h-[45%] overflow-y-auto border-b border-border/40">
-              <div className="px-3 pt-3 pb-1">
+            {/* ---- Instance rows (thin left column) ---- */}
+            <div className="w-[300px] flex-shrink-0 flex flex-col overflow-y-auto border-r border-border/40 bg-card/10">
+              <div className="px-3 pt-3 pb-1 sticky top-0 bg-background/95 backdrop-blur z-10 border-b border-border/40 mb-2">
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
-                    Instâncias — Conversas não categorizadas
+                    Instâncias
                   </span>
                 </div>
               </div>
@@ -995,8 +1000,8 @@ export default function MessagesPage() {
             </div>
 
             {/* ---- Category columns (horizontal scroll) ---- */}
-            <div className="flex-1 overflow-hidden flex flex-col">
-              <div className="px-3 pt-3 pb-1 flex items-center justify-between flex-shrink-0">
+            <div className="flex-1 overflow-hidden flex flex-col bg-secondary/10">
+              <div className="px-4 pt-3 pb-2 flex items-center justify-between flex-shrink-0 border-b border-border/40 bg-background/50 backdrop-blur-sm">
                 <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
                   Categorias
                 </span>
