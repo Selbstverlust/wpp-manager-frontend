@@ -919,9 +919,7 @@ export default function MessagesPage() {
     );
   }
 
-  const selectedChatKey = selectedChat
-    ? `${selectedChat.instanceName}-${selectedChat.remoteJid || selectedChat.id}`
-    : null;
+  const selectedChatKey = selectedChat ? getChatKey(selectedChat) : null;
 
   // ---- Chat card component (reused in both instance list and category columns) ----
 
@@ -931,10 +929,9 @@ export default function MessagesPage() {
     const timestamp = formatTimestamp(getChatTimestamp(chat));
     const { text: preview, icon: previewIcon } = getLastMessagePreview(chat);
     const unread = chat.unreadCount || 0;
-    const chatKey = `${chat.instanceName}-${chat.remoteJid || chat.id || index}`;
+    const chatKey = getChatKey(chat);
     const isSelected = chatKey === selectedChatKey;
-    const chatAssignmentKey = getChatKey(chat);
-    const assignedCategoryId = assignmentMap.get(chatAssignmentKey);
+    const assignedCategoryId = assignmentMap.get(chatKey);
 
     return (
       <Draggable draggableId={chatKey} index={index} key={chatKey}>
@@ -948,10 +945,18 @@ export default function MessagesPage() {
             <ContextMenu>
               <ContextMenuTrigger asChild>
                 <div className="relative group block w-full">
-                  <button
+                  <div
+                    role="button"
+                    tabIndex={0}
                     onClick={() => handleSelectChat(chat)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        handleSelectChat(chat);
+                      }
+                    }}
                     className={cn(
-                      'w-full rounded-lg border p-2.5 text-left transition-all duration-150',
+                      'w-full rounded-lg border p-2.5 text-left transition-all duration-150 outline-none cursor-pointer',
                       isSelected
                         ? 'bg-primary/10 border-primary/40 shadow-sm ring-1 ring-primary/20'
                         : 'bg-card border-border/50 hover:border-border hover:shadow-sm',
@@ -997,7 +1002,7 @@ export default function MessagesPage() {
                         </div>
                       </div>
                     </div>
-                  </button>
+                  </div>
                 </div>
               </ContextMenuTrigger>
 
