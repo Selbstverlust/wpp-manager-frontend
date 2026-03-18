@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea/dnd';
 import { useAuthContext } from '@/context/AuthContext';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -113,6 +114,7 @@ interface ChatCategoryAssignment {
   remoteJid: string;
   instanceName: string;
   userId: string;
+  position?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -637,6 +639,15 @@ export default function MessagesPage() {
     return map;
   }, [assignments]);
 
+  /** Full assignment lookup for position sorting */
+  const assignmentFullMap = useMemo(() => {
+    const map = new Map<string, ChatCategoryAssignment>();
+    for (const a of assignments) {
+      map.set(`${a.instanceName}::${a.remoteJid}`, a);
+    }
+    return map;
+  }, [assignments]);
+
   /** All chats filtered by search, excluding groups/broadcasts */
   const filteredChats = useMemo(() => {
     if (!data?.chats) return [];
@@ -683,10 +694,130 @@ export default function MessagesPage() {
         map.get(catId)!.push(chat);
       }
     }
+    // Sort each category's chats by their assigned position
+    for (const [catId, arr] of map.entries()) {
+      arr.sort((a, b) => {
+        const keyA = getChatKey(a);
+        const keyB = getChatKey(b);
+        const posA = assignmentFullMap.get(keyA)?.position ?? 0;
+        const posB = assignmentFullMap.get(keyB)?.position ?? 0;
+        return posA - posB;
+      });
+    }
     return map;
-  }, [filteredChats, categories, assignmentMap]);
+  }, [filteredChats, categories, assignmentMap, assignmentFullMap]);
 
   // ---- Handlers ----
+
+  const onDragEnd = async (result: DropResult) => {
+    const { source, destination, draggableId } = result;
+    if (!destination) return;
+    if (source.droppableId === destination.droppableId && source.index === destination.index) return;
+
+    const separatorIdx = draggableId.indexOf('::');
+    if (separatorIdx === -1) return;
+    const instanceName = draggableId.slice(0, separatorIdx);
+    const remoteJid = draggableId.slice(separatorIdx + 2);
+
+    const isSourceCategory = source.droppableId.startsWith('cat-');
+    const isDestCategory = destination.droppableId.startsWith('cat-');
+
+    if (source.droppableId === destination.droppableId) {
+      // Reordering within the same column
+      if (isDestCategory) {
+        const catId = destination.droppableId.replace('cat-', '');
+        const currentChats = Array.from(chatsByCategory.get(catId) || []);
+        
+        // Optimitically update UI
+        const [moved] = currentChats.splice(source.index, 1);
+        currentChats.splice(destination.index, 0, moved);
+
+        const newAssignments = [...assignments];
+        currentChats.forEach((chat, i) => {
+          const key = getChatKey(chat);
+          const idx = newAssignments.findIndex(a => `${a.instanceName}::${a.remoteJid}` === key);
+          if (idx !== -1) {
+            newAssignments[idx].position = i;
+          }
+        });
+        setAssignments(newAssignments);
+
+        // Sync to backend
+        const payload = currentChats.map(c => ({
+          remoteJid: c.remoteJid || c.id || '',
+          instanceName: c.instanceName,
+        }));
+        
+        fetch(`${backendUrl}/categories/${catId}/reorder-chats`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ chats: payload })
+        }).catch(console.error);
+      }
+      return;
+    }
+
+    // Moving across different columns
+    const chatToMove = filteredChats.find(c => getChatKey(c) === draggableId);
+    if (!chatToMove) return;
+
+    if (isDestCategory) {
+      const newCatId = destination.droppableId.replace('cat-', '');
+      const newCatChats = Array.from(chatsByCategory.get(newCatId) || []);
+      
+      // Optimistically insert
+      newCatChats.splice(destination.index, 0, chatToMove);
+
+      const updatedAssignments = [...assignments.filter(a => `${a.instanceName}::${a.remoteJid}` !== draggableId)];
+      
+      // We push a mock assignment for optimistic update
+      newCatChats.forEach((chat, i) => {
+         const key = getChatKey(chat);
+         const existing = updatedAssignments.find(a => `${a.instanceName}::${a.remoteJid}` === key);
+         if (existing) {
+           existing.position = i;
+         } else if (key === draggableId) {
+           updatedAssignments.push({
+             id: 'temp-' + Date.now(),
+             categoryId: newCatId,
+             remoteJid,
+             instanceName,
+             userId: '',
+             position: i
+           });
+         }
+      });
+      setAssignments(updatedAssignments);
+
+      // Backend Calls: 1) Assign 2) Reorder
+      try {
+         await fetch(`${backendUrl}/categories/${newCatId}/assign`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+            body: JSON.stringify({ remoteJid, instanceName }),
+         });
+         const payload = newCatChats.map(c => ({
+           remoteJid: c.remoteJid || c.id || '',
+           instanceName: c.instanceName,
+         }));
+         await fetch(`${backendUrl}/categories/${newCatId}/reorder-chats`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+            body: JSON.stringify({ chats: payload })
+         });
+         fetchAssignments(); // Re-fetch to get real IDs
+      } catch(e) { console.error(e) }
+    } else {
+      // Dropped into an unsorted instance list (unassign)
+      const newAssignments = assignments.filter(a => `${a.instanceName}::${a.remoteJid}` !== draggableId);
+      setAssignments(newAssignments);
+      fetch(`${backendUrl}/categories/temp/assign`, {
+        method: 'DELETE',
+         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+         body: JSON.stringify({ remoteJid, instanceName }),
+      }).catch(console.error);
+    }
+  };
 
   function handleSelectChat(chat: Chat) {
     setSelectedChat(chat);
@@ -788,97 +919,108 @@ export default function MessagesPage() {
     const assignedCategoryId = assignmentMap.get(chatAssignmentKey);
 
     return (
-      <ContextMenu key={chatKey}>
-        <ContextMenuTrigger asChild>
-          <div className="relative group block w-full">
-            <button
-              onClick={() => handleSelectChat(chat)}
-              className={cn(
-                'w-full rounded-lg border p-2.5 text-left transition-all duration-150',
-                isSelected
-                  ? 'bg-primary/10 border-primary/40 shadow-sm ring-1 ring-primary/20'
-                  : 'bg-card border-border/50 hover:border-border hover:shadow-sm',
-                unread > 0 && !isSelected && 'border-primary/20 bg-primary/[0.03]'
-              )}
-            >
-              <div className="flex items-start gap-2.5">
-                {/* Avatar */}
-                <div className="relative flex-shrink-0">
-                  <div className="w-9 h-9 rounded-full flex items-center justify-center text-[10px] font-semibold bg-primary/10 text-primary">
-                    {initials}
-                  </div>
-                  {unread > 0 && (
-                    <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-primary text-primary-foreground text-[8px] font-bold flex items-center justify-center shadow-sm">
-                      {unread > 99 ? '99+' : unread}
-                    </span>
-                  )}
-                </div>
-
-                {/* Info */}
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center justify-between gap-1 mb-0.5">
-                    <span className={cn('text-xs truncate', unread > 0 ? 'font-semibold text-foreground' : 'font-medium text-foreground')}>
-                      {displayName}
-                    </span>
-                    {timestamp && (
-                      <span className={cn('text-[10px] flex-shrink-0', unread > 0 ? 'text-primary font-semibold' : 'text-muted-foreground')}>
-                        {timestamp}
-                      </span>
+      <Draggable draggableId={chatKey} index={index} key={chatKey}>
+        {(provided, snapshot) => (
+          <div
+            ref={provided.innerRef}
+            {...provided.draggableProps}
+            {...provided.dragHandleProps}
+            className={cn('mb-1.5 focus:outline-none focus-visible:ring-0', snapshot.isDragging && 'opacity-90 z-50')}
+          >
+            <ContextMenu>
+              <ContextMenuTrigger asChild>
+                <div className="relative group block w-full">
+                  <button
+                    onClick={() => handleSelectChat(chat)}
+                    className={cn(
+                      'w-full rounded-lg border p-2.5 text-left transition-all duration-150',
+                      isSelected
+                        ? 'bg-primary/10 border-primary/40 shadow-sm ring-1 ring-primary/20'
+                        : 'bg-card border-border/50 hover:border-border hover:shadow-sm',
+                      unread > 0 && !isSelected && 'border-primary/20 bg-primary/[0.03]'
                     )}
-                  </div>
-                  <div className="flex items-center gap-1">
-                    {previewIcon && <span className="text-muted-foreground">{previewIcon}</span>}
-                    {preview && (
-                      <p className={cn('text-[11px] truncate leading-snug flex-1', unread > 0 ? 'text-foreground/80' : 'text-muted-foreground')}>
-                        {preview}
-                      </p>
-                    )}
-                    {/* Instance badge in category view */}
-                    <span className={cn('inline-flex items-center rounded px-1 py-0.5 text-[8px] font-medium flex-shrink-0 ml-auto', getInstanceColor(chat.instanceName))}>
-                      {chat.instanceName}
-                    </span>
-                  </div>
-                </div>
-              </div>
-            </button>
-          </div>
-        </ContextMenuTrigger>
-
-        <ContextMenuContent className="w-48">
-          {categories.length > 0 && (
-            <ContextMenuSub>
-              <ContextMenuSubTrigger>
-                <Tag className="h-3.5 w-3.5 mr-2" />
-                Mover para categoria
-              </ContextMenuSubTrigger>
-              <ContextMenuSubContent className="w-48">
-                {categories.map((cat) => (
-                  <ContextMenuItem
-                    key={cat.id}
-                    onClick={() => assignChatToCategory(chat, cat.id)}
-                    className={cn(assignedCategoryId === cat.id && 'bg-primary/10')}
                   >
-                    <span
-                      className="w-2.5 h-2.5 rounded-full mr-2 flex-shrink-0"
-                      style={{ backgroundColor: cat.color || '#6366f1' }}
-                    />
-                    {cat.name}
-                    {assignedCategoryId === cat.id && (
-                      <Check className="h-3.5 w-3.5 ml-auto text-primary" />
-                    )}
+                    <div className="flex items-start gap-2.5">
+                      {/* Avatar */}
+                      <div className="relative flex-shrink-0">
+                        <div className="w-9 h-9 rounded-full flex items-center justify-center text-[10px] font-semibold bg-primary/10 text-primary">
+                          {initials}
+                        </div>
+                        {unread > 0 && (
+                          <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-primary text-primary-foreground text-[8px] font-bold flex items-center justify-center shadow-sm">
+                            {unread > 99 ? '99+' : unread}
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Info */}
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between gap-1 mb-0.5">
+                          <span className={cn('text-xs truncate', unread > 0 ? 'font-semibold text-foreground' : 'font-medium text-foreground')}>
+                            {displayName}
+                          </span>
+                          {timestamp && (
+                            <span className={cn('text-[10px] flex-shrink-0', unread > 0 ? 'text-primary font-semibold' : 'text-muted-foreground')}>
+                              {timestamp}
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-1">
+                          {previewIcon && <span className="text-muted-foreground">{previewIcon}</span>}
+                          {preview && (
+                            <p className={cn('text-[11px] truncate leading-snug flex-1', unread > 0 ? 'text-foreground/80' : 'text-muted-foreground')}>
+                              {preview}
+                            </p>
+                          )}
+                          {/* Instance badge in category view */}
+                          <span className={cn('inline-flex items-center rounded px-1 py-0.5 text-[8px] font-medium flex-shrink-0 ml-auto', getInstanceColor(chat.instanceName))}>
+                            {chat.instanceName}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </button>
+                </div>
+              </ContextMenuTrigger>
+
+              <ContextMenuContent className="w-48">
+                {categories.length > 0 && (
+                  <ContextMenuSub>
+                    <ContextMenuSubTrigger>
+                      <Tag className="h-3.5 w-3.5 mr-2" />
+                      Mover para categoria
+                    </ContextMenuSubTrigger>
+                    <ContextMenuSubContent className="w-48">
+                      {categories.map((cat) => (
+                        <ContextMenuItem
+                          key={cat.id}
+                          onClick={() => assignChatToCategory(chat, cat.id)}
+                          className={cn(assignedCategoryId === cat.id && 'bg-primary/10')}
+                        >
+                          <span
+                            className="w-2.5 h-2.5 rounded-full mr-2 flex-shrink-0"
+                            style={{ backgroundColor: cat.color || '#6366f1' }}
+                          />
+                          {cat.name}
+                          {assignedCategoryId === cat.id && (
+                            <Check className="h-3.5 w-3.5 ml-auto text-primary" />
+                          )}
+                        </ContextMenuItem>
+                      ))}
+                    </ContextMenuSubContent>
+                  </ContextMenuSub>
+                )}
+                {assignedCategoryId && (
+                  <ContextMenuItem onClick={() => unassignChat(chat)}>
+                    <X className="h-3.5 w-3.5 mr-2" />
+                    Remover da categoria
                   </ContextMenuItem>
-                ))}
-              </ContextMenuSubContent>
-            </ContextMenuSub>
-          )}
-          {assignedCategoryId && (
-            <ContextMenuItem onClick={() => unassignChat(chat)}>
-              <X className="h-3.5 w-3.5 mr-2" />
-              Remover da categoria
-            </ContextMenuItem>
-          )}
-        </ContextMenuContent>
-      </ContextMenu>
+                )}
+              </ContextMenuContent>
+            </ContextMenu>
+          </div>
+        )}
+      </Draggable>
     );
   }
 
@@ -887,8 +1029,9 @@ export default function MessagesPage() {
   // =======================================================================
 
   return (
-    <div className="h-[calc(100vh-4rem)] bg-gradient-to-b from-background to-secondary/20 overflow-hidden">
-      <div className="flex h-full">
+    <DragDropContext onDragEnd={onDragEnd}>
+      <div className="h-[calc(100vh-4rem)] bg-gradient-to-b from-background to-secondary/20 overflow-hidden">
+        <div className="flex h-full">
 
         {/* ================================================================ */}
         {/* LEFT PANEL – Instances (vertical) + Category Columns             */}
@@ -976,17 +1119,26 @@ export default function MessagesPage() {
 
                     {/* Expanded chat list */}
                     {isExpanded && (
-                      <div className="mt-1.5 space-y-1.5 pl-2">
-                        {chats.length > 0 ? (
-                          chats.map((chat, index) => renderChatCard(chat, index))
-                        ) : (
-                          <div className="flex items-center justify-center py-4 px-2 text-center">
-                            <p className="text-[11px] text-muted-foreground">
-                              {search.trim() ? 'Nenhum resultado' : 'Todas as conversas estão categorizadas'}
-                            </p>
+                      <Droppable droppableId={`inst-${instanceName}`}>
+                        {(provided, snapshot) => (
+                          <div 
+                            {...provided.droppableProps}
+                            ref={provided.innerRef}
+                            className={cn('mt-1.5 min-h-[50px] space-y-1.5 pl-2', snapshot.isDraggingOver && 'bg-primary/5 rounded-b-lg')}
+                          >
+                            {chats.length > 0 ? (
+                              chats.map((chat, index) => renderChatCard(chat, index))
+                            ) : (
+                              <div className="flex items-center justify-center py-4 px-2 text-center pointer-events-none">
+                                <p className="text-[11px] text-muted-foreground">
+                                  {search.trim() ? 'Nenhum resultado' : 'Todas as conversas estão categorizadas'}
+                                </p>
+                              </div>
+                            )}
+                            {provided.placeholder}
                           </div>
                         )}
-                      </div>
+                      </Droppable>
                     )}
                   </div>
                 );
@@ -1065,18 +1217,27 @@ export default function MessagesPage() {
 
                         {/* Category body — scrollable chat cards */}
                         <ScrollArea className="flex-1">
-                          <div className="p-2 space-y-2">
-                            {chats.length > 0 ? (
-                              chats.map((chat, index) => renderChatCard(chat, index))
-                            ) : (
-                              <div className="flex flex-col items-center justify-center py-8 px-2 text-center">
-                                <FolderOpen className="h-6 w-6 text-muted-foreground/30 mb-2" />
-                                <p className="text-[11px] text-muted-foreground">
-                                  {search.trim() ? 'Nenhum resultado' : 'Sem conversas'}
-                                </p>
+                          <Droppable droppableId={`cat-${cat.id}`}>
+                            {(provided, snapshot) => (
+                              <div
+                                {...provided.droppableProps}
+                                ref={provided.innerRef}
+                                className={cn('p-2 min-h-[200px] h-full space-y-2', snapshot.isDraggingOver && 'bg-primary/5')}
+                              >
+                                {chats.length > 0 ? (
+                                  chats.map((chat, index) => renderChatCard(chat, index))
+                                ) : (
+                                  <div className="flex flex-col items-center justify-center py-8 px-2 text-center pointer-events-none">
+                                    <FolderOpen className="h-6 w-6 text-muted-foreground/30 mb-2" />
+                                    <p className="text-[11px] text-muted-foreground">
+                                      {search.trim() ? 'Nenhum resultado' : 'Arraste conversas para cá'}
+                                    </p>
+                                  </div>
+                                )}
+                                {provided.placeholder}
                               </div>
                             )}
-                          </div>
+                          </Droppable>
                         </ScrollArea>
                       </div>
                     );
@@ -1315,5 +1476,6 @@ export default function MessagesPage() {
         </DialogContent>
       </Dialog>
     </div>
+  </DragDropContext>
   );
 }
