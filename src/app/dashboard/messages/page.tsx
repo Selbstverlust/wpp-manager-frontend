@@ -341,6 +341,9 @@ export default function MessagesPage() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
 
+  const [isMounted, setIsMounted] = useState(false);
+  useEffect(() => { setIsMounted(true); }, []);
+
   // ---- Categories state ----
   const [categories, setCategories] = useState<Category[]>([]);
   const [assignments, setAssignments] = useState<ChatCategoryAssignment[]>([]);
@@ -681,6 +684,17 @@ export default function MessagesPage() {
     return map;
   }, [filteredChats, instances, assignmentMap]);
 
+  /** Chats without category, sorted by timestamp */
+  const unsortedChats = useMemo(() => {
+    const list: Chat[] = [];
+    for (const chat of filteredChats) {
+      if (!assignmentMap.has(getChatKey(chat))) {
+        list.push(chat);
+      }
+    }
+    return list.sort((a, b) => normalizeTimestamp(getChatTimestamp(b)) - normalizeTimestamp(getChatTimestamp(a)));
+  }, [filteredChats, assignmentMap]);
+
   /** Chats grouped by category */
   const chatsByCategory = useMemo(() => {
     const map = new Map<string, Chat[]>();
@@ -808,14 +822,18 @@ export default function MessagesPage() {
          fetchAssignments(); // Re-fetch to get real IDs
       } catch(e) { console.error(e) }
     } else {
-      // Dropped into an unsorted instance list (unassign)
+      // Dropped into an unsorted instance list or unassigned column (unassign)
+      const oldAssignment = assignments.find(a => `${a.instanceName}::${a.remoteJid}` === draggableId);
       const newAssignments = assignments.filter(a => `${a.instanceName}::${a.remoteJid}` !== draggableId);
       setAssignments(newAssignments);
-      fetch(`${backendUrl}/categories/temp/assign`, {
-        method: 'DELETE',
-         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-         body: JSON.stringify({ remoteJid, instanceName }),
-      }).catch(console.error);
+      
+      if (oldAssignment) {
+        fetch(`${backendUrl}/categories/${oldAssignment.categoryId}/assign`, {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ remoteJid, instanceName }),
+        }).catch(console.error);
+      }
     }
   };
 
@@ -1028,6 +1046,8 @@ export default function MessagesPage() {
   // RENDER
   // =======================================================================
 
+  if (!isMounted) return null;
+
   return (
     <DragDropContext onDragEnd={onDragEnd}>
       <div className="h-[calc(100vh-4rem)] bg-gradient-to-b from-background to-secondary/20 overflow-hidden">
@@ -1170,6 +1190,42 @@ export default function MessagesPage() {
 
               <div className="flex-1 overflow-x-auto overflow-y-hidden">
                 <div className="flex gap-3 p-3 h-full min-w-max">
+                  {/* --- Unassigned / Sem Categoria Column --- */}
+                  <div className="w-[280px] flex-shrink-0 flex flex-col rounded-xl bg-secondary/30 border border-border/50">
+                    <div className="flex items-center justify-between px-3 py-2.5 border-b border-border/40">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="w-2.5 h-2.5 rounded-full flex-shrink-0 bg-muted-foreground/50" />
+                        <span className="text-sm font-semibold text-foreground truncate">Sem Categoria</span>
+                      </div>
+                      <span className="inline-flex items-center justify-center rounded-full bg-primary/10 text-primary text-[11px] font-bold px-2 py-0.5">
+                        {unsortedChats.length}
+                      </span>
+                    </div>
+                    <ScrollArea className="flex-1">
+                      <Droppable droppableId="unassigned">
+                        {(provided, snapshot) => (
+                          <div
+                            {...provided.droppableProps}
+                            ref={provided.innerRef}
+                            className={cn('p-2 min-h-[200px] h-full space-y-2', snapshot.isDraggingOver && 'bg-primary/5')}
+                          >
+                            {unsortedChats.length > 0 ? (
+                              unsortedChats.map((chat, index) => renderChatCard(chat, index))
+                            ) : (
+                              <div className="flex flex-col items-center justify-center py-8 px-2 text-center pointer-events-none">
+                                <FolderOpen className="h-6 w-6 text-muted-foreground/30 mb-2" />
+                                <p className="text-[11px] text-muted-foreground">
+                                  {search.trim() ? 'Nenhum resultado' : 'Todas categorias'}
+                                </p>
+                              </div>
+                            )}
+                            {provided.placeholder}
+                          </div>
+                        )}
+                      </Droppable>
+                    </ScrollArea>
+                  </div>
+
                   {categories.map((cat) => {
                     const chats = chatsByCategory.get(cat.id) || [];
 
