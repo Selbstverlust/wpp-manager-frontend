@@ -940,7 +940,7 @@ export default function MessagesPage() {
             ref={provided.innerRef}
             {...provided.draggableProps}
             {...provided.dragHandleProps}
-            className={cn('mb-1.5 focus:outline-none focus-visible:ring-0', snapshot.isDragging && 'opacity-90 z-50')}
+            className={cn('pb-1.5 focus:outline-none focus-visible:ring-0', snapshot.isDragging && 'opacity-90 z-50')}
           >
             <ContextMenu>
               <ContextMenuTrigger asChild>
@@ -1063,7 +1063,7 @@ export default function MessagesPage() {
         {/* ================================================================ */}
         <div
           className={cn(
-            'flex flex-col border-r border-border/60 bg-card/30 backdrop-blur-sm',
+            'flex flex-col border-r border-border/60 bg-card',
             selectedChat ? 'hidden lg:flex' : 'flex',
             'w-full lg:w-1/2 lg:min-w-0',
           )}
@@ -1149,7 +1149,7 @@ export default function MessagesPage() {
                           <div 
                             {...provided.droppableProps}
                             ref={provided.innerRef}
-                            className={cn('mt-1.5 min-h-[50px] space-y-1.5 pl-2', snapshot.isDraggingOver && 'bg-primary/5 rounded-b-lg')}
+                            className={cn('mt-1.5 min-h-[50px] pl-2', snapshot.isDraggingOver && 'bg-primary/5 rounded-b-lg')}
                           >
                             {chats.length > 0 ? (
                               chats.map((chat, index) => renderChatCard(chat, index))
@@ -1178,7 +1178,7 @@ export default function MessagesPage() {
 
             {/* ---- Category columns (horizontal scroll) ---- */}
             <div className="flex-1 overflow-hidden flex flex-col bg-secondary/10">
-              <div className="px-4 pt-3 pb-2 flex items-center justify-between flex-shrink-0 border-b border-border/40 bg-background/50 backdrop-blur-sm">
+              <div className="px-4 pt-3 pb-2 flex items-center justify-between flex-shrink-0 border-b border-border/40 bg-background/50">
                 <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
                   Categorias
                 </span>
@@ -1195,42 +1195,6 @@ export default function MessagesPage() {
 
               <div className="flex-1 overflow-x-auto overflow-y-hidden">
                 <div className="flex gap-3 p-3 h-full min-w-max">
-                  {/* --- Unassigned / Sem Categoria Column --- */}
-                  <div className="w-[280px] flex-shrink-0 flex flex-col rounded-xl bg-secondary/30 border border-border/50">
-                    <div className="flex items-center justify-between px-3 py-2.5 border-b border-border/40">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <span className="w-2.5 h-2.5 rounded-full flex-shrink-0 bg-muted-foreground/50" />
-                        <span className="text-sm font-semibold text-foreground truncate">Sem Categoria</span>
-                      </div>
-                      <span className="inline-flex items-center justify-center rounded-full bg-primary/10 text-primary text-[11px] font-bold px-2 py-0.5">
-                        {unsortedChats.length}
-                      </span>
-                    </div>
-                    <ScrollArea className="flex-1">
-                      <Droppable droppableId="unassigned">
-                        {(provided, snapshot) => (
-                          <div
-                            {...provided.droppableProps}
-                            ref={provided.innerRef}
-                            className={cn('p-2 min-h-[200px] h-full space-y-2', snapshot.isDraggingOver && 'bg-primary/5')}
-                          >
-                            {unsortedChats.length > 0 ? (
-                              unsortedChats.map((chat, index) => renderChatCard(chat, index))
-                            ) : (
-                              <div className="flex flex-col items-center justify-center py-8 px-2 text-center pointer-events-none">
-                                <FolderOpen className="h-6 w-6 text-muted-foreground/30 mb-2" />
-                                <p className="text-[11px] text-muted-foreground">
-                                  {search.trim() ? 'Nenhum resultado' : 'Todas categorias'}
-                                </p>
-                              </div>
-                            )}
-                            {provided.placeholder}
-                          </div>
-                        )}
-                      </Droppable>
-                    </ScrollArea>
-                  </div>
-
                   {categories.map((cat) => {
                     const chats = chatsByCategory.get(cat.id) || [];
 
@@ -1283,7 +1247,7 @@ export default function MessagesPage() {
                               <div
                                 {...provided.droppableProps}
                                 ref={provided.innerRef}
-                                className={cn('p-2 min-h-[200px] h-full space-y-2', snapshot.isDraggingOver && 'bg-primary/5')}
+                                className={cn('p-2 min-h-[200px] h-full', snapshot.isDraggingOver && 'bg-primary/5')}
                               >
                                 {chats.length > 0 ? (
                                   chats.map((chat, index) => renderChatCard(chat, index))
