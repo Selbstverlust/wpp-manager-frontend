@@ -584,7 +584,13 @@ export default function MessagesPage() {
 
   async function refreshChats() {
     setRefreshing(true);
+    const current = selectedChatRef.current;
     await Promise.all([fetchChats(), fetchCategories(), fetchAssignments()]);
+    // Also reload the message history for the currently open conversation.
+    if (current) {
+      const jid = current.remoteJid || current.id || '';
+      if (jid) await fetchMessages(current.instanceName, jid, current._allJids);
+    }
     setRefreshing(false);
   }
 
