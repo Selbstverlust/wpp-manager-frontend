@@ -62,6 +62,8 @@ import {
   DialogTitle,
   DialogFooter,
 } from '@/components/ui/dialog';
+import type { Socket } from 'socket.io-client';
+import { createMessagesRealtimeSocket, RealtimeEnvelope } from '@/lib/messages-realtime';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -323,6 +325,27 @@ function getChatKey(chat: Chat): string {
   return `${chat.instanceName}::${chat.remoteJid || chat.id || ''}`;
 }
 
+function extractEventRemoteJid(payload: any): string {
+  return (
+    payload?.key?.remoteJid ||
+    payload?.data?.key?.remoteJid ||
+    payload?.message?.key?.remoteJid ||
+    payload?.messages?.[0]?.key?.remoteJid ||
+    payload?.chat?.remoteJid ||
+    payload?.remoteJid ||
+    ''
+  );
+}
+
+function normalizeIncomingMessageRecord(payload: any): any {
+  if (!payload) return null;
+  if (payload.key && payload.message) return payload;
+  if (payload.data?.key && payload.data?.message) return payload.data;
+  if (payload.message?.key && payload.message?.message) return payload.message;
+  if (Array.isArray(payload.messages) && payload.messages.length > 0) return payload.messages[0];
+  return payload;
+}
+
 // ---------------------------------------------------------------------------
 // Page component
 // ---------------------------------------------------------------------------
@@ -340,6 +363,8 @@ export default function MessagesPage() {
   const { token } = useAuthContext();
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const socketRef = useRef<Socket | null>(null);
+  const selectedChatRef = useRef<Chat | null>(null);
 
   const [isMounted, setIsMounted] = useState(false);
   useEffect(() => { setIsMounted(true); }, []);
@@ -445,6 +470,106 @@ export default function MessagesPage() {
       }
     }
   }, [token, backendUrl]);
+
+  const applyRealtimeMessage = useCallback((eventType: string, payload: any, instanceName: string) => {
+    const selected = selectedChatRef.current;
+    const normalizedMessage = normalizeIncomingMessageRecord(payload);
+    if (!normalizedMessage) return;
+    const eventJid = extractEventRemoteJid(normalizedMessage);
+    const selectedJid = selected?.remoteJid || selected?.id || '';
+    const selectedAllJids = selected?._allJids || [];
+    const belongsToSelected =
+      !!selected &&
+      selected.instanceName === instanceName &&
+      !!eventJid &&
+      (eventJid === selectedJid || selectedAllJids.includes(eventJid));
+
+    if (belongsToSelected) {
+      if (eventType === 'MESSAGES_DELETE') {
+        const deleteId = normalizedMessage.key?.id || normalizedMessage.id;
+        if (deleteId) {
+          setMessages((prev) =>
+            prev.filter((m) => (m.key?.id || m.id) !== deleteId),
+          );
+        }
+      } else {
+        setMessages((prev) => {
+          const incomingId = normalizedMessage.key?.id || normalizedMessage.id;
+          if (incomingId) {
+            const idx = prev.findIndex((m) => (m.key?.id || m.id) === incomingId);
+            if (idx >= 0) {
+              const next = [...prev];
+              next[idx] = { ...prev[idx], ...normalizedMessage };
+              return next;
+            }
+          }
+          const next = [...prev, normalizedMessage];
+          next.sort((a, b) => {
+            const tA = normalizeTimestamp(a.messageTimestamp || a.MessageTimestamp);
+            const tB = normalizeTimestamp(b.messageTimestamp || b.MessageTimestamp);
+            return tA - tB;
+          });
+          return next;
+        });
+      }
+    }
+
+    if (!eventJid) return;
+    setData((prev) => {
+      if (!prev) return prev;
+      const idx = prev.chats.findIndex(
+        (chat) =>
+          chat.instanceName === instanceName &&
+          (chat.remoteJid === eventJid || chat.id === eventJid || chat._allJids?.includes(eventJid)),
+      );
+      if (idx < 0) return prev;
+      const nextChats = [...prev.chats];
+      const existing = nextChats[idx];
+      const unreadDelta = normalizedMessage?.key?.fromMe ? 0 : 1;
+      nextChats[idx] = {
+        ...existing,
+        remoteJid: existing.remoteJid || eventJid,
+        lastMessage: normalizedMessage,
+        updatedAt: new Date().toISOString(),
+        unreadCount: eventType === 'MESSAGES_DELETE'
+          ? Math.max((existing.unreadCount || 0) - unreadDelta, 0)
+          : (existing.unreadCount || 0) + unreadDelta,
+      };
+      nextChats.sort((a, b) => normalizeTimestamp(getChatTimestamp(b)) - normalizeTimestamp(getChatTimestamp(a)));
+      return { ...prev, chats: nextChats };
+    });
+  }, []);
+
+  const applyRealtimeChat = useCallback((eventType: string, payload: any, instanceName: string) => {
+    const rawChat = payload?.chat || payload?.data || payload;
+    const remoteJid = rawChat?.remoteJid || rawChat?.id || extractEventRemoteJid(payload);
+    if (!remoteJid) return;
+    setData((prev) => {
+      if (!prev) return prev;
+      const nextChats = [...prev.chats];
+      const idx = nextChats.findIndex(
+        (chat) =>
+          chat.instanceName === instanceName &&
+          (chat.remoteJid === remoteJid || chat.id === remoteJid || chat._allJids?.includes(remoteJid)),
+      );
+
+      if (eventType === 'CHATS_DELETE') {
+        if (idx >= 0) nextChats.splice(idx, 1);
+        return { ...prev, chats: nextChats };
+      }
+
+      const merged = {
+        ...(idx >= 0 ? nextChats[idx] : {}),
+        ...(rawChat || {}),
+        instanceName,
+        remoteJid,
+      };
+      if (idx >= 0) nextChats[idx] = merged;
+      else nextChats.push(merged);
+      nextChats.sort((a, b) => normalizeTimestamp(getChatTimestamp(b)) - normalizeTimestamp(getChatTimestamp(a)));
+      return { ...prev, chats: nextChats };
+    });
+  }, []);
 
   async function loadChats() {
     setLoading(true);
@@ -616,10 +741,73 @@ export default function MessagesPage() {
   }, [selectedChat, fetchMessages]);
 
   useEffect(() => {
+    selectedChatRef.current = selectedChat;
+  }, [selectedChat]);
+
+  useEffect(() => {
     if (messagesEndRef.current) {
       messagesEndRef.current.scrollIntoView({ behavior: 'auto' });
     }
   }, [messages]);
+
+  useEffect(() => {
+    if (!backendUrl || !token) return;
+    const socket = createMessagesRealtimeSocket(backendUrl, token);
+    socketRef.current = socket;
+
+    socket.on('messages:event', (envelope: RealtimeEnvelope) => {
+      const eventType = envelope?.event || '';
+      const instanceName = envelope?.instanceName || '';
+      if (!eventType || !instanceName) return;
+
+      if (eventType === 'CONNECTION_UPDATE') {
+        const isConnected = String(
+          envelope.payload?.state || envelope.payload?.connection || envelope.payload?.status || '',
+        ).toLowerCase() === 'open';
+        setData((prev) => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            instances: prev.instances.map((inst) =>
+              inst.name === instanceName ? { ...inst, connected: isConnected } : inst,
+            ),
+          };
+        });
+        return;
+      }
+
+      if (
+        eventType === 'MESSAGES_UPSERT' ||
+        eventType === 'MESSAGES_UPDATE' ||
+        eventType === 'MESSAGES_DELETE' ||
+        eventType === 'SEND_MESSAGE'
+      ) {
+        applyRealtimeMessage(eventType, envelope.payload, instanceName);
+        return;
+      }
+
+      if (
+        eventType === 'CHATS_UPSERT' ||
+        eventType === 'CHATS_UPDATE' ||
+        eventType === 'CHATS_DELETE'
+      ) {
+        applyRealtimeChat(eventType, envelope.payload, instanceName);
+      }
+    });
+
+    return () => {
+      socket.removeAllListeners();
+      socket.disconnect();
+      socketRef.current = null;
+    };
+  }, [backendUrl, token, applyRealtimeMessage, applyRealtimeChat]);
+
+  useEffect(() => {
+    const socket = socketRef.current;
+    if (!socket || !data?.instances?.length) return;
+    const connectedNames = data.instances.filter((inst) => inst.connected).map((inst) => inst.name);
+    socket.emit('messages:watch-instances', { instances: connectedNames });
+  }, [data?.instances]);
 
   // Auto-expand all instances on first load
   useEffect(() => {
