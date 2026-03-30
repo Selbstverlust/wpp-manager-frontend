@@ -360,14 +360,19 @@ export default function MessagesPage() {
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [messageInput, setMessageInput] = useState('');
   const [sending, setSending] = useState(false);
+  const [wsConnected, setWsConnected] = useState(false);
   const { token } = useAuthContext();
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const socketRef = useRef<Socket | null>(null);
   const selectedChatRef = useRef<Chat | null>(null);
+  const dataRef = useRef<ChatsResponse | null>(null);
 
   const [isMounted, setIsMounted] = useState(false);
   useEffect(() => { setIsMounted(true); }, []);
+
+  // Keep dataRef in sync so connect/reconnect handlers can access latest instance list.
+  useEffect(() => { dataRef.current = data; }, [data]);
 
   // ---- Categories state ----
   const [categories, setCategories] = useState<Category[]>([]);
@@ -755,6 +760,24 @@ export default function MessagesPage() {
     const socket = createMessagesRealtimeSocket(backendUrl, token);
     socketRef.current = socket;
 
+    const emitWatchInstances = () => {
+      const instances = dataRef.current?.instances;
+      if (!instances?.length) return;
+      // Watch all instances (connected + disconnected) so CONNECTION_UPDATE events
+      // are received even for instances that are currently offline.
+      const allNames = instances.map((inst) => inst.name);
+      socket.emit('messages:watch-instances', { instances: allNames });
+    };
+
+    socket.on('connect', () => {
+      setWsConnected(true);
+      emitWatchInstances();
+    });
+
+    socket.on('disconnect', () => {
+      setWsConnected(false);
+    });
+
     socket.on('messages:event', (envelope: RealtimeEnvelope) => {
       const eventType = envelope?.event || '';
       const instanceName = envelope?.instanceName || '';
@@ -799,14 +822,16 @@ export default function MessagesPage() {
       socket.removeAllListeners();
       socket.disconnect();
       socketRef.current = null;
+      setWsConnected(false);
     };
   }, [backendUrl, token, applyRealtimeMessage, applyRealtimeChat]);
 
   useEffect(() => {
     const socket = socketRef.current;
     if (!socket || !data?.instances?.length) return;
-    const connectedNames = data.instances.filter((inst) => inst.connected).map((inst) => inst.name);
-    socket.emit('messages:watch-instances', { instances: connectedNames });
+    // Watch all instances so we also receive CONNECTION_UPDATE for offline ones.
+    const allNames = data.instances.map((inst) => inst.name);
+    socket.emit('messages:watch-instances', { instances: allNames });
   }, [data?.instances]);
 
   // Auto-expand all instances on first load
@@ -1280,6 +1305,14 @@ export default function MessagesPage() {
                     onChange={(e) => setSearch(e.target.value)}
                     className="pl-9 h-9 text-sm"
                   />
+                </div>
+                <div
+                  title={wsConnected ? 'Realtime conectado' : 'Realtime desconectado'}
+                  className="flex items-center justify-center h-9 w-9 flex-shrink-0"
+                >
+                  {wsConnected
+                    ? <Wifi className="h-4 w-4 text-green-500" />
+                    : <WifiOff className="h-4 w-4 text-muted-foreground" />}
                 </div>
                 <Button
                   variant="ghost"
