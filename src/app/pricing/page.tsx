@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useEffect, useState, useRef } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { Check, Crown, Sparkles, ArrowLeft, Loader2 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
@@ -10,9 +10,16 @@ import { Badge } from '@/components/ui/badge';
 import { useToast } from '@/hooks/use-toast';
 import { useAuthContext } from '@/context/AuthContext';
 import { PayPalButton } from '@/components/paypal-button';
+import { StripeButton } from '@/components/stripe-button';
 
-interface PlanInfo {
+interface PaypalPlanInfo {
     planId: string;
+    price: string;
+    currency: string;
+    interval: string;
+}
+
+interface StripePlanInfo {
     price: string;
     currency: string;
     interval: string;
@@ -20,10 +27,13 @@ interface PlanInfo {
 
 export default function PricingPage() {
     const router = useRouter();
+    const searchParams = useSearchParams();
     const { toast } = useToast();
     const { token, isPremium, subscription, refreshSubscription, loading: authLoading } = useAuthContext();
-    const [planInfo, setPlanInfo] = useState<PlanInfo | null>(null);
+    const [paypalPlanInfo, setPaypalPlanInfo] = useState<PaypalPlanInfo | null>(null);
+    const [stripePlanInfo, setStripePlanInfo] = useState<StripePlanInfo | null>(null);
     const [loadingPlan, setLoadingPlan] = useState(true);
+    const stripeReturnHandled = useRef(false);
 
     // Redirect to login if not authenticated
     useEffect(() => {
@@ -32,35 +42,98 @@ export default function PricingPage() {
         }
     }, [authLoading, token, router]);
 
-    // Fetch plan info
+    // R10: Fetch plan info from both PayPal and Stripe
     useEffect(() => {
-        async function fetchPlan() {
+        async function fetchPlans() {
+            const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
             try {
-                const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/paypal/plan`);
-                if (response.ok) {
-                    const data = await response.json();
-                    setPlanInfo(data);
+                const [paypalRes, stripeRes] = await Promise.allSettled([
+                    fetch(`${apiUrl}/paypal/plan`),
+                    fetch(`${apiUrl}/stripe/plan`),
+                ]);
+
+                if (paypalRes.status === 'fulfilled' && paypalRes.value.ok) {
+                    const data = await paypalRes.value.json();
+                    setPaypalPlanInfo(data);
+                }
+
+                if (stripeRes.status === 'fulfilled' && stripeRes.value.ok) {
+                    const data = await stripeRes.value.json();
+                    setStripePlanInfo(data);
                 }
             } catch (error) {
-                console.error('Failed to fetch plan:', error);
+                console.error('Failed to fetch plan info:', error);
             } finally {
                 setLoadingPlan(false);
             }
         }
 
-        fetchPlan();
+        fetchPlans();
     }, []);
 
-    const handlePaymentSuccess = async (subscriptionId: string) => {
+    // R11: Handle Stripe return — verify session or show cancellation toast
+    useEffect(() => {
+        if (authLoading || stripeReturnHandled.current) return;
+
+        const sessionId = searchParams.get('session_id');
+        const cancelled = searchParams.get('stripe_cancelled');
+
+        if (sessionId) {
+            stripeReturnHandled.current = true;
+
+            const handleStripeSuccess = async () => {
+                try {
+                    const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
+                    const response = await fetch(`${apiUrl}/stripe/verify-session`, {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': `Bearer ${token}`,
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({ sessionId }),
+                    });
+
+                    if (!response.ok) {
+                        throw new Error('Falha ao verificar sessão de pagamento');
+                    }
+
+                    toast({
+                        title: 'Pagamento realizado com sucesso!',
+                        description: 'Sua assinatura PRO foi ativada. Aproveite todos os recursos premium!',
+                    });
+
+                    await refreshSubscription();
+
+                    setTimeout(() => {
+                        router.push('/dashboard');
+                    }, 2000);
+                } catch (error) {
+                    toast({
+                        title: 'Erro ao verificar pagamento',
+                        description: error instanceof Error ? error.message : 'Tente novamente ou entre em contato.',
+                        variant: 'destructive',
+                    });
+                }
+            };
+
+            handleStripeSuccess();
+        } else if (cancelled === 'true') {
+            stripeReturnHandled.current = true;
+            toast({
+                title: 'Pagamento cancelado',
+                description: 'Você cancelou o processo de pagamento com Stripe.',
+            });
+        }
+    }, [authLoading, searchParams, token, refreshSubscription, router, toast]);
+
+    const handlePaymentSuccess = async (_subscriptionId: string) => {
         toast({
             title: 'Pagamento realizado com sucesso!',
             description: 'Sua assinatura PRO foi ativada. Aproveite todos os recursos premium!',
         });
 
-        // Refresh subscription status
         await refreshSubscription();
 
-        // Redirect to dashboard after short delay
         setTimeout(() => {
             router.push('/dashboard');
         }, 2000);
@@ -88,6 +161,8 @@ export default function PricingPage() {
             currency: currency,
         }).format(numPrice);
     };
+
+    const displayPrice = paypalPlanInfo || stripePlanInfo;
 
     if (authLoading) {
         return (
@@ -201,7 +276,9 @@ export default function PricingPage() {
                                 ) : (
                                     <>
                                         <span className="text-4xl font-bold">
-                                            {planInfo ? formatPrice(planInfo.price, planInfo.currency) : 'R$ 100,00'}
+                                            {displayPrice
+                                                ? formatPrice(displayPrice.price, displayPrice.currency)
+                                                : 'R$ 100,00'}
                                         </span>
                                         <span className="text-muted-foreground">/mês</span>
                                     </>
@@ -243,15 +320,20 @@ export default function PricingPage() {
                                     )}
                                 </div>
                             ) : (
-                                <div className="space-y-4">
+                                <div className="space-y-3">
+                                    {/* R10: Both payment options shown */}
                                     <p className="text-xs text-center text-muted-foreground">
-                                        Pagamento seguro via PayPal
+                                        Escolha sua forma de pagamento
                                     </p>
                                     <PayPalButton
-                                        planId={planInfo?.planId || ''}
+                                        planId={paypalPlanInfo?.planId || ''}
                                         onSuccess={handlePaymentSuccess}
                                         onError={handlePaymentError}
                                         onCancel={handlePaymentCancel}
+                                        disabled={isPremium || loadingPlan}
+                                    />
+                                    <StripeButton
+                                        onError={handlePaymentError}
                                         disabled={isPremium || loadingPlan}
                                     />
                                 </div>
@@ -260,7 +342,7 @@ export default function PricingPage() {
                     </Card>
                 </div>
 
-                {/* FAQ or additional info */}
+                {/* FAQ */}
                 <div className="mt-16 max-w-2xl mx-auto text-center">
                     <h2 className="text-2xl font-display font-bold mb-4">
                         Perguntas Frequentes
@@ -269,13 +351,13 @@ export default function PricingPage() {
                         <div className="p-4 rounded-lg bg-secondary/30">
                             <h3 className="font-semibold mb-2">Como funciona a cobrança?</h3>
                             <p className="text-sm text-muted-foreground">
-                                A cobrança é feita mensalmente via PayPal. Você pode cancelar a qualquer momento.
+                                A cobrança é feita mensalmente via PayPal ou Stripe. Você pode cancelar a qualquer momento.
                             </p>
                         </div>
                         <div className="p-4 rounded-lg bg-secondary/30">
                             <h3 className="font-semibold mb-2">Posso cancelar minha assinatura?</h3>
                             <p className="text-sm text-muted-foreground">
-                                Sim! Você pode cancelar sua assinatura a qualquer momento através do PayPal ou entrando em contato conosco.
+                                Sim! Você pode cancelar sua assinatura a qualquer momento através do PayPal ou Stripe, ou entrando em contato conosco.
                             </p>
                         </div>
                         <div className="p-4 rounded-lg bg-secondary/30">
