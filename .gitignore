@@ -20,6 +20,8 @@
 # ide
 .cursorignore
 .idx
+.claude/
+CLAUDE.md
 
 # production
 /build

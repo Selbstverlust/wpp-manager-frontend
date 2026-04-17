@@ -34,19 +34,25 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         headers: { Authorization: `Bearer ${token}` },
       });
       setSubscription(response.data);
-    } catch (error) {
-      console.error('Failed to fetch subscription:', error);
+    } catch (error: any) {
       setSubscription(null);
+      if (error?.response?.status === 401) {
+        clearStoredAuth();
+        setAuthState(null);
+      }
     }
   }, []);
 
   useEffect(() => {
-    const stored = getStoredAuth();
-    if (stored) {
-      setAuthState(stored);
-      fetchSubscription(stored.token);
-    }
-    setLoading(false);
+    const initialize = async () => {
+      const stored = getStoredAuth();
+      if (stored) {
+        setAuthState(stored);
+        await fetchSubscription(stored.token);
+      }
+      setLoading(false);
+    };
+    initialize();
   }, [fetchSubscription]);
 
   const login = useCallback(
